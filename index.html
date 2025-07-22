@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>문서 자동 입력 시스템</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.10.0",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.4.168",
+    "openai": "https://esm.sh/openai@^4.28.0"
+  }
+}
+</script>
+</head>
+<body>
+    <div id="app-container">
+        <header>
+            <h1>문서 자동 입력 시스템</h1>
+            <p>이미지나 PDF 문서를 업로드하여 정산 내역을 자동으로 추출하고 관리하세요.</p>
+            <div id="update-notification" class="update-notification hidden">
+                <div class="update-content">
+                    <span class="update-icon">🚀</span>
+                    <div class="update-text">
+                        <strong>새 업데이트가 있습니다!</strong>
+                        <span id="update-version"></span>
+                    </div>
+                    <div class="update-actions">
+                        <button id="update-button" class="update-btn">업데이트</button>
+                        <button id="dismiss-update" class="dismiss-btn">나중에</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+        <main>
+            <div id="ai-selector-compact">
+                <div class="ai-provider-section">
+                    <label for="ai-provider">AI 선택:</label>
+                    <div id="ai-provider-pills">
+                        <button class="ai-pill" data-provider="gemini">
+                            <span class="pill-status"></span>
+                            <span class="pill-text">Gemini</span>
+                        </button>
+                        <button class="ai-pill" data-provider="openai">
+                            <span class="pill-status"></span>
+                            <span class="pill-text">OpenAI</span>
+                        </button>
+                        <button class="ai-pill" data-provider="upstage">
+                            <span class="pill-status"></span>
+                            <span class="pill-text">Upstage</span>
+                        </button>
+                        <button class="ai-pill" data-provider="ollama">
+                            <span class="pill-status"></span>
+                            <span class="pill-text">Ollama</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="model-selector-section">
+                    <label for="model-selector">모델 선택:</label>
+                    <select id="model-selector">
+                        <option value="">제공자를 먼저 선택하세요</option>
+                    </select>
+                </div>
+                <div class="api-settings-section">
+                    <button id="api-settings-button" class="settings-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-1 13.5l103 78-110 190-119-50q-11 8-23 15t-24 12L590-80H370Zm70-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 41q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 65q-5 14-7 29.5t-2 31.5q0 16 2 31.5t7 29.5l-86 65 39 68 99-41q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></svg>
+                        <span>API 설정</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div id="content-grid">
+            <div id="upload-section">
+                <h2>문서 업로드</h2>
+                <div id="drop-zone" role="button" aria-label="문서 이미지 또는 PDF 파일을 여기로 드래그하거나 클릭하여 업로드하세요">
+                    <p>이미지 또는 PDF 파일을 드래그 앤 드롭하거나 클릭하여 선택하세요.</p>
+                    <input type="file" id="file-input" accept="image/*,application/pdf" multiple hidden>
+                    <img id="image-preview" src="" alt="업로드된 이미지 미리보기" class="hidden">
+                </div>
+                <button id="process-button" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M480-80q-84 0-158-30.5T195-195q-54-54-84.5-128T80-480q0-84 30.5-158T195-765q54-54 128-84.5T480-880q52 0 101 12.5T673-831l-47 47q-40-10-86-10-142 0-241 99t-99 241q0 142 99 241t241 99q116 0 211.5-73T774-480h-84l152-152 152 152h-84q-22 134-118 221t-226 87Z"/></svg>
+                    <span>데이터 추출</span>
+                </button>
+                <div id="pdf-preview-container" class="hidden">
+                    <h3>처리할 페이지를 선택하세요 (다중 선택 가능)</h3>
+                    <div id="pdf-pages"></div>
+                </div>
+            </div>
+            <div id="data-section">
+                <h2>추출된 데이터</h2>
+                <div class="table-container">
+                    <table id="data-table">
+                        <thead>
+                            <tr>
+                                <th>일자</th>
+                                <th>수량 (GT)</th>
+                                <th>금액 (US$)</th>
+                                <th>수수료 (US$)</th>
+                                <th>수수료포함금액 (US$)</th>
+                                <th>수수료포함금액 (₩)</th>
+                                <th>잔액 (₩)</th>
+                                <th>삭제</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Data rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="table-actions">
+                     <button id="copy-button">
+                        <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M360-200q-33 0-56.5-23.5T280-280v-560q0-33 23.5-56.5T360-920h360q33 0 56.5 23.5T800-840v560q0 33-23.5 56.5T720-200H360Zm0-80h360v-560H360v560ZM200-80q-33 0-56.5-23.5T120-160v-560h80v560h440v80H200Zm160-760v560-560Z"/></svg>
+                        <span>엑셀로 복사</span>
+                    </button>
+                     <button id="add-row-button">
+                        <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z"/></svg>
+                        <span>행 추가</span>
+                    </button>
+                </div>
+                
+                <div id="rating-section" class="hidden">
+                    <h3>결과 평가</h3>
+                    <p>추출된 데이터의 품질을 평가해 주세요:</p>
+                    <div id="rating-buttons">
+                        <button id="like-button" class="rating-button">
+                            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M720-120H280v-520l280-280 50 50q7 7 11.5 19t4.5 23v14l-44 174h258q32 0 56 24t24 56v80q0 7-2 15t-4 15L794-168q-9 20-30 34t-44 14Zm-360-80h360l120-280v-80H480l54-220-174 174v406Zm0-406v406-406Zm-80-34v80H160v360h120v80H80v-520h200Z"/></svg>
+                            <span>좋아요</span>
+                        </button>
+                        <button id="dislike-button" class="rating-button">
+                            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M240-840h440v520L400-40l-50-50q-7-7-11.5-19T334-132v-14l44-174H120q-32 0-56-24t-24-56v-80q0-7 2-15t4-15l120-282q9-20 30-34t44-14Zm360 80H240L120-480v80h360l-54 220 174-174v-406Zm0 406v-406 406Zm80 34v-80h120v-360H680v-80h200v520H680Z"/></svg>
+                            <span>싫어요</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="analytics-section">
+                    <div id="analytics-toggle">
+                        <button id="show-analytics-button">
+                            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M280-280h80v-200h-80v200Zm320-160h80v-80h-80v80Zm-160-80h80v-160h-80v160Zm160 240h80v-200h-80v200Zm-160-80h80v-120h-80v120ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z"/></svg>
+                            <span>사용 통계 보기</span>
+                        </button>
+                    </div>
+                    <div id="analytics-dashboard" class="hidden">
+                        <h3>모델 사용 통계 및 선호도</h3>
+                        
+                        <!-- 탭 메뉴 -->
+                        <div id="analytics-tabs">
+                            <button class="tab-button active" data-tab="recent">최근 사용</button>
+                            <button class="tab-button" data-tab="stats">전체 통계</button>
+                        </div>
+                        
+                        <!-- 최근 사용 탭 -->
+                        <div id="recent-tab" class="tab-content">
+                            <div id="recent-usage-container">
+                                <h4>최근 모델 사용 기록</h4>
+                                <div id="recent-usage-list"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- 전체 통계 탭 -->
+                        <div id="stats-tab" class="tab-content hidden">
+                            <div id="stats-container">
+                                <div id="cost-summary"></div>
+                                <div id="model-stats-table"></div>
+                            </div>
+                        </div>
+                        
+                        <div id="export-section">
+                            <button id="export-logs-button">
+                                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
+                                <span>로그 내보내기</span>
+                            </button>
+                            <button id="clear-logs-button">
+                                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
+                                <span>로그 삭제</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                 <div id="loading-overlay" class="hidden" aria-live="assertive">
+                    <div class="spinner"></div>
+                    <p>AI가 문서를 분석 중입니다...</p>
+                </div>
+            </div>
+            </div>
+        </main>
+        
+        <!-- API Settings Modal -->
+        <div id="api-settings-modal" class="modal hidden">
+            <div class="modal-overlay" id="modal-overlay"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>API 키 설정</h2>
+                    <button id="close-modal" class="close-modal">
+                        <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="modal-description">AI 제공자의 API 키를 설정하세요. 키는 안전하게 암호화되어 로컬에 저장됩니다.</p>
+                    
+                    <div class="api-key-section">
+                        <label for="gemini-key">Google Gemini API Key</label>
+                        <div class="key-input-group">
+                            <input type="password" id="gemini-key" placeholder="API 키를 입력하세요">
+                            <button type="button" class="toggle-visibility" data-target="gemini-key">
+                                <svg class="eye-icon" xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M480-320q75 0 127.5-52.5T660-500q0-75-52.5-127.5T480-680q-75 0-127.5 52.5T300-500q0 75 52.5 127.5T480-320Zm0-72q-45 0-76.5-31.5T372-500q0-45 31.5-76.5T480-608q45 0 76.5 31.5T588-500q0 45-31.5 76.5T480-392Zm0 192q-146 0-266-81.5T40-500q54-137 174-218.5T480-800q146 0 266 81.5T920-500q-54 137-174 218.5T480-200Zm0-300Zm0 220q113 0 207.5-59.5T832-500q-50-101-144.5-160.5T480-720q-113 0-207.5 59.5T128-500q50 101 144.5 160.5T480-280Z"/></svg>
+                            </button>
+                        </div>
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="api-link">키 발급받기</a>
+                    </div>
+                    
+                    <div class="api-key-section">
+                        <label for="openai-key">OpenAI API Key</label>
+                        <div class="key-input-group">
+                            <input type="password" id="openai-key" placeholder="API 키를 입력하세요">
+                            <button type="button" class="toggle-visibility" data-target="openai-key">
+                                <svg class="eye-icon" xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M480-320q75 0 127.5-52.5T660-500q0-75-52.5-127.5T480-680q-75 0-127.5 52.5T300-500q0 75 52.5 127.5T480-320Zm0-72q-45 0-76.5-31.5T372-500q0-45 31.5-76.5T480-608q45 0 76.5 31.5T588-500q0 45-31.5 76.5T480-392Zm0 192q-146 0-266-81.5T40-500q54-137 174-218.5T480-800q146 0 266 81.5T920-500q-54 137-174 218.5T480-200Zm0-300Zm0 220q113 0 207.5-59.5T832-500q-50-101-144.5-160.5T480-720q-113 0-207.5 59.5T128-500q50 101 144.5 160.5T480-280Z"/></svg>
+                            </button>
+                        </div>
+                        <a href="https://platform.openai.com/api-keys" target="_blank" class="api-link">키 발급받기</a>
+                    </div>
+                    
+                    <div class="api-key-section">
+                        <label for="claude-key">Claude API Key</label>
+                        <div class="key-input-group">
+                            <input type="password" id="claude-key" placeholder="API 키를 입력하세요">
+                            <button type="button" class="toggle-visibility" data-target="claude-key">
+                                <svg class="eye-icon" xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M480-320q75 0 127.5-52.5T660-500q0-75-52.5-127.5T480-680q-75 0-127.5 52.5T300-500q0 75 52.5 127.5T480-320Zm0-72q-45 0-76.5-31.5T372-500q0-45 31.5-76.5T480-608q45 0 76.5 31.5T588-500q0 45-31.5 76.5T480-392Zm0 192q-146 0-266-81.5T40-500q54-137 174-218.5T480-800q146 0 266 81.5T920-500q-54 137-174 218.5T480-200Zm0-300Zm0 220q113 0 207.5-59.5T832-500q-50-101-144.5-160.5T480-720q-113 0-207.5 59.5T128-500q50 101 144.5 160.5T480-280Z"/></svg>
+                            </button>
+                        </div>
+                        <a href="https://console.anthropic.com/" target="_blank" class="api-link">키 발급받기</a>
+                    </div>
+                    
+                    <div class="api-key-section">
+                        <label for="upstage-key">Upstage API Key</label>
+                        <div class="key-input-group">
+                            <input type="password" id="upstage-key" placeholder="API 키를 입력하세요">
+                            <button type="button" class="toggle-visibility" data-target="upstage-key">
+                                <svg class="eye-icon" xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M480-320q75 0 127.5-52.5T660-500q0-75-52.5-127.5T480-680q-75 0-127.5 52.5T300-500q0 75 52.5 127.5T480-320Zm0-72q-45 0-76.5-31.5T372-500q0-45 31.5-76.5T480-608q45 0 76.5 31.5T588-500q0 45-31.5 76.5T480-392Zm0 192q-146 0-266-81.5T40-500q54-137 174-218.5T480-800q146 0 266 81.5T920-500q-54 137-174 218.5T480-200Zm0-300Zm0 220q113 0 207.5-59.5T832-500q-50-101-144.5-160.5T480-720q-113 0-207.5 59.5T128-500q50 101 144.5 160.5T480-280Z"/></svg>
+                            </button>
+                        </div>
+                        <a href="https://console.upstage.ai/" target="_blank" class="api-link">키 발급받기</a>
+                    </div>
+                    
+                    <div class="modal-actions">
+                        <button id="save-api-keys" class="primary-btn">저장</button>
+                        <button id="cancel-api-settings" class="secondary-btn">취소</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Powered by AI</p>
+        </footer>
+    </div>
+    <script type="module" src="index.tsx"></script>
+</body>
+</html>
