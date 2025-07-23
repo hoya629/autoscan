@@ -149,9 +149,6 @@ header p {
     color: white;
 }
 
-.api-settings-section {
-    flex: 0 0 auto;
-}
 
 .settings-btn {
     padding: 0.5rem 1rem;
@@ -504,6 +501,25 @@ main {
     box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     margin-bottom: 1rem;
     align-items: flex-start;
+}
+
+/* Ensure API settings section is always visible */
+.api-settings-section {
+    flex: 0 0 auto;
+    display: flex !important;
+    gap: 0.5rem;
+    align-items: center;
+    min-width: fit-content;
+    visibility: visible !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+}
+
+/* Force visibility of update button */
+.update-check-btn {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
 .ai-provider-section,
@@ -1422,6 +1438,17 @@ footer {
     #ai-provider-pills {
         justify-content: center;
     }
+    
+    /* Ensure buttons are always visible on smaller screens */
+    #ai-selector-compact {
+        gap: 1rem;
+    }
+    
+    .api-settings-section {
+        order: 3; /* Move to end so it's always visible */
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 @media (max-width: 768px) {
@@ -1434,5 +1461,40 @@ footer {
     }
     #upload-section, #data-section, #settings-section {
         padding: 1.5rem;
+    }
+    
+    /* Make buttons stack vertically on very small screens */
+    .api-settings-section {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+    
+    .settings-btn,
+    .update-check-btn {
+        font-size: 0.8rem;
+        padding: 0.5rem 0.8rem;
+        white-space: nowrap;
+    }
+}
+
+/* Windows-specific styles */
+@supports (-ms-overflow-style: none) {
+    /* IE/Edge */
+    .api-settings-section {
+        width: auto !important;
+        flex-shrink: 0 !important;
+    }
+}
+
+@supports ((-webkit-overflow-scrolling: touch) or (-ms-overflow-style: -ms-autohiding-scrollbar)) {
+    /* Chrome/Safari on Windows */
+    #ai-selector-compact {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+    }
+    
+    .api-settings-section {
+        flex-shrink: 0;
+        min-width: 200px;
     }
 }

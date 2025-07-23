@@ -1304,11 +1304,23 @@ function hideAPISettingsModal() {
 }
 
 async function saveAPIKeysFromModal() {
+    console.log('💾 [API Keys] Saving API keys from modal...');
     const keys: SecureAPIKeys = {};
     
-    if (geminiKeyInput?.value.trim()) keys.gemini = geminiKeyInput.value.trim();
-    if (openaiKeyInput?.value.trim()) keys.openai = openaiKeyInput.value.trim();
-    if (upstageKeyInput?.value.trim()) keys.upstage = upstageKeyInput.value.trim();
+    if (geminiKeyInput?.value.trim()) {
+        keys.gemini = geminiKeyInput.value.trim();
+        console.log('💾 [API Keys] Gemini key added, length:', keys.gemini.length);
+    }
+    if (openaiKeyInput?.value.trim()) {
+        keys.openai = openaiKeyInput.value.trim();
+        console.log('💾 [API Keys] OpenAI key added, length:', keys.openai.length);
+    }
+    if (upstageKeyInput?.value.trim()) {
+        keys.upstage = upstageKeyInput.value.trim();
+        console.log('💾 [API Keys] Upstage key added, length:', keys.upstage.length);
+    }
+    
+    console.log('💾 [API Keys] Total keys to save:', Object.keys(keys).length);
     
     try {
         // Save with new encryption system
@@ -1948,7 +1960,8 @@ function validateAndCleanExtractedData(data: any) {
 
 // AI Processing Functions
 async function processWithGemini(pageData: PageData) {
-    console.log('Starting Gemini processing with model:', currentSettings.model);
+    console.log('🚀 [Gemini] Starting Gemini processing with model:', currentSettings.model);
+    console.log('🚀 [Gemini] Platform:', navigator.platform, 'UserAgent:', navigator.userAgent.substring(0, 50));
     
     const textPart = {
         text: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요."
@@ -1959,12 +1972,17 @@ async function processWithGemini(pageData: PageData) {
     };
 
     try {
+        console.log('🚀 [Gemini] Checking API key...');
         const apiKey = getAPIKey('gemini');
         if (!apiKey || apiKey.trim() === '') {
+            console.error('❌ [Gemini] API key not found or empty');
             throw new Error('Gemini API key not configured. Please set your API key in the settings.');
         }
+        console.log('✅ [Gemini] API key found, length:', apiKey.length);
 
-        console.log('Sending request directly to Gemini API...');
+        console.log('🚀 [Gemini] Sending request directly to Gemini API...');
+        console.log('🚀 [Gemini] Request URL:', `https://generativelanguage.googleapis.com/v1beta/models/${currentSettings.model}:generateContent`);
+        console.log('🚀 [Gemini] Image data length:', pageData.data.length, 'MIME type:', pageData.mimeType);
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentSettings.model}:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: {
@@ -1978,9 +1996,11 @@ async function processWithGemini(pageData: PageData) {
             })
         });
 
-        console.log('Gemini proxy response status:', response.status, response.statusText);
+        console.log('✅ [Gemini] Response received, status:', response.status, response.statusText);
+        console.log('✅ [Gemini] Response headers:', Object.fromEntries(response.headers.entries()));
 
         if (!response.ok) {
+            console.error('❌ [Gemini] API request failed with status:', response.status);
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
             console.error('Gemini proxy error:', errorData);
             throw new Error(`Gemini API 오류 (${response.status}): ${errorData.error || response.statusText}`);
@@ -2000,10 +2020,23 @@ async function processWithGemini(pageData: PageData) {
         return validateAndCleanExtractedData(parsedData);
         
     } catch (error) {
-        console.error('Gemini processing error:', error);
-        if (error instanceof Error && error.message.includes('fetch')) {
-            throw new Error('프록시 서버에 연결할 수 없습니다. proxy-server.cjs가 실행되고 있는지 확인하세요.');
+        console.error('❌ [Gemini] Processing error:', error);
+        console.error('❌ [Gemini] Error type:', error.constructor.name);
+        console.error('❌ [Gemini] Error stack:', error.stack);
+        console.error('❌ [Gemini] Browser:', navigator.userAgent);
+        
+        // Windows-specific debugging
+        if (error instanceof Error) {
+            if (error.message.includes('fetch')) {
+                console.error('❌ [Gemini] Network error detected - possible CORS or firewall issue');
+                throw new Error('네트워크 오류: CORS 정책이나 방화벽이 API 요청을 차단했을 수 있습니다.');
+            }
+            if (error.message.includes('Failed to fetch')) {
+                console.error('❌ [Gemini] Failed to fetch - possible network connectivity issue');
+                throw new Error('네트워크 연결 오류: 인터넷 연결이나 DNS 설정을 확인하세요.');
+            }
         }
+        
         throw error;
     }
 }
@@ -2303,6 +2336,24 @@ function setupEventListeners() {
     dismissUpdateButton = document.getElementById('dismiss-update') as HTMLButtonElement;
     checkUpdateButton = document.getElementById('check-update-button') as HTMLButtonElement;
     
+    // Debug: Check if update button is properly loaded
+    console.log('🔧 [Debug] Update button element:', checkUpdateButton);
+    console.log('🔧 [Debug] Update button visibility:', checkUpdateButton ? getComputedStyle(checkUpdateButton).display : 'element not found');
+    
+    // Windows-specific debugging
+    console.log('🔧 [Debug] Platform:', navigator.platform);
+    console.log('🔧 [Debug] User Agent:', navigator.userAgent);
+    console.log('🔧 [Debug] Language:', navigator.language);
+    console.log('🔧 [Debug] Online:', navigator.onLine);
+    
+    // Check for potential blocking extensions
+    if (typeof (window as any).chrome !== 'undefined') {
+        console.log('🔧 [Debug] Chrome extension environment detected');
+    }
+    if (typeof (window as any).InstallTrigger !== 'undefined') {
+        console.log('🔧 [Debug] Firefox environment detected');
+    }
+    
     // API Settings Modal elements
     apiSettingsModal = document.getElementById('api-settings-modal') as HTMLDivElement;
     apiSettingsButton = document.getElementById('api-settings-button') as HTMLButtonElement;
@@ -2488,6 +2539,37 @@ function setupEventListeners() {
     });
 }
 
+// Network connectivity test for Windows debugging
+async function testNetworkConnectivity() {
+    console.log('🔧 [Network Test] Starting connectivity tests...');
+    
+    const tests = [
+        { name: 'Google DNS', url: 'https://dns.google/resolve?name=google.com&type=A' },
+        { name: 'Gemini API', url: 'https://generativelanguage.googleapis.com/' },
+        { name: 'OpenAI API', url: 'https://api.openai.com/' },
+        { name: 'Upstage API', url: 'https://api.upstage.ai/' }
+    ];
+    
+    for (const test of tests) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            const start = Date.now();
+            const response = await fetch(test.url, {
+                method: 'HEAD',
+                signal: controller.signal
+            });
+            const duration = Date.now() - start;
+            
+            clearTimeout(timeoutId);
+            console.log(`✅ [Network Test] ${test.name}: ${response.status} (${duration}ms)`);
+        } catch (error) {
+            console.error(`❌ [Network Test] ${test.name} failed:`, error.message);
+        }
+    }
+}
+
 // Initial setup
 document.addEventListener('DOMContentLoaded', async () => {
     // Load usage logs
@@ -2512,4 +2594,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Initialize update checker
     initializeUpdateChecker();
+    
+    // Windows-specific network connectivity test
+    if (navigator.userAgent.toLowerCase().includes('win')) {
+        console.log('🔧 [Debug] Windows detected, running network tests...');
+        setTimeout(() => testNetworkConnectivity(), 2000); // Run after 2 seconds
+    }
 });
