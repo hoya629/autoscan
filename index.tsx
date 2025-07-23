@@ -604,8 +604,11 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
     // First check if API key is available for all providers except local ones
     if (['gemini', 'openai', 'upstage', 'claude'].includes(provider)) {
         const apiKey = getAPIKey(provider);
-        console.log(`[Provider Check] ${provider} API key available:`, !!apiKey);
-        if (!apiKey) return false;
+        console.log(`[Provider Check] ${provider} API key available:`, !!apiKey, `(key: "${apiKey}")`);
+        if (!apiKey || apiKey.trim() === '') {
+            console.log(`[Provider Check] ${provider} API key is empty or null - returning false`);
+            return false;
+        }
         
         // For proxy server providers, check if proxy server is running (optional)
         if (['gemini', 'openai', 'upstage'].includes(provider)) {
@@ -669,7 +672,7 @@ function isProviderAvailableSync(provider: string): boolean {
     // For proxy server providers, check if API key is available
     if (['gemini', 'openai', 'upstage', 'claude'].includes(provider)) {
         const apiKey = getAPIKey(provider);
-        return !!apiKey;
+        return !!apiKey && apiKey.trim() !== '';
     }
     
     // For local models, check if endpoint is configured
