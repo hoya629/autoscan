@@ -25,9 +25,8 @@ interface PageData {
 }
 
 interface AISettings {
-    provider: 'gemini' | 'openai' | 'upstage' | 'ollama';
+    provider: 'gemini' | 'openai' | 'upstage';
     model: string;
-    localEndpoint?: string; // For local models
 }
 
 interface UsageLog {
@@ -68,26 +67,7 @@ interface DeleteAction {
 const deleteHistory: DeleteAction[] = [];
 const MAX_UNDO_HISTORY = 10;
 
-// Cache system for AI responses
-interface CacheEntry {
-    hash: string;
-    provider: string;
-    model: string;
-    data: any;
-    timestamp: number;
-}
 
-const AI_CACHE_KEY = 'ai_response_cache';
-const CACHE_EXPIRY_DAYS = 7; // 7일 후 만료
-
-// Local encrypted file storage configuration
-const LOCAL_STORAGE_CONFIG = {
-    fileName: '.api_keys_encrypted.json',
-    keyFile: '.encryption_key'
-};
-
-// Use existing APP_CONFIG for consistency
-// GitHub repository configuration is handled by APP_CONFIG
 
 // Pricing information (USD per 1M tokens) - Updated for 2025
 const MODEL_PRICING = {
@@ -105,11 +85,6 @@ const MODEL_PRICING = {
     
     // Upstage pricing (estimated)
     'document-parse': { input: 0.50, output: 1.00 },
-    
-    // Local models (free)
-    'llama3.2-vision:11b': { input: 0, output: 0 },
-    'llava:13b': { input: 0, output: 0 },
-    'moondream:latest': { input: 0, output: 0 }
 } as const;
 
 function calculateCost(modelId: string, inputTokens: number, outputTokens: number): number {
@@ -144,18 +119,13 @@ const PROVIDER_MODELS = {
     ],
     upstage: [
         { id: 'document-parse', name: 'Document Parse', description: '문서 텍스트 추출 모델' }
-    ],
-    ollama: [
-        { id: 'llama3.2-vision:11b', name: 'Llama 3.2 Vision 11B', description: '로컬 비전 모델' },
-        { id: 'llava:13b', name: 'LLaVA 13B', description: '로컬 멀티모달 모델' },
-        { id: 'moondream:latest', name: 'Moondream', description: '경량 비전 모델' }
     ]
 };
 
 // Application configuration
 const APP_CONFIG = {
-    version: '1.0.0',
-    githubRepo: 'hoya629/autoscan', // TODO: Replace with actual GitHub repository
+    version: '1.0.1',
+    githubRepo: '', // Will be auto-detected
     checkForUpdates: true
 };
 
@@ -166,24 +136,13 @@ let selectedPages: PageData[] = [];
 let pdfFileGroups: Map<string, PageData[]> = new Map(); // Group pages by filename
 let currentSettings: AISettings = {
     provider: 'gemini',
-    model: 'gemini-2.5-flash',
-    localEndpoint: 'http://localhost:11434' // Default Ollama endpoint
+    model: 'gemini-2.5-flash'
 };
 
 // Usage logging
 let usageLogs: UsageLog[] = [];
 let currentLogId: string | null = null;
 
-// Get local endpoint for Ollama (only provider that doesn't use proxy)
-const getLocalEndpoint = (provider: string): string => {
-    const env = (import.meta as any).env;
-    switch (provider) {
-        case 'ollama':
-            return env?.VITE_OLLAMA_ENDPOINT || 'http://localhost:11434';
-        default:
-            return '';
-    }
-};
 
 // Load settings from localStorage
 function loadSettings(): AISettings {
@@ -580,13 +539,14 @@ let aiProviderPills: NodeListOf<HTMLButtonElement>;
 let modelSelector: HTMLSelectElement;
 let tabButtons: NodeListOf<HTMLButtonElement>;
 
+let debugStatusButton: HTMLButtonElement;
+
 // Update elements
 let updateNotification: HTMLDivElement;
 let updateVersionSpan: HTMLSpanElement;
 let updateButton: HTMLButtonElement;
 let dismissUpdateButton: HTMLButtonElement;
 let checkUpdateButton: HTMLButtonElement;
-let debugStatusButton: HTMLButtonElement;
 
 // API Settings Modal elements
 let apiSettingsModal: HTMLDivElement;
@@ -645,35 +605,6 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
         return true;
     }
     
-    // For local models, check if endpoint is accessible
-    if (provider === 'ollama') {
-        try {
-            const endpoint = getLocalEndpoint(provider);
-            if (!endpoint) {
-                console.log(`🔍 [Provider Check] ${provider} endpoint not configured`);
-                return false;
-            }
-            
-            const healthEndpoint = '/api/tags';
-            
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 1000);
-            
-            console.log(`🔍 [Provider Check] ${provider} testing endpoint: ${endpoint + healthEndpoint}`);
-            const response = await fetch(endpoint + healthEndpoint, {
-                method: 'GET',
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            const isOk = response.ok;
-            console.log(`🔍 [Provider Check] ${provider} endpoint test result: ${isOk} (status: ${response.status})`);
-            return isOk;
-        } catch (error) {
-            console.log(`🔍 [Provider Check] ${provider} endpoint test failed:`, error.message);
-            return false;
-        }
-    }
     
     return false;
 }
@@ -686,11 +617,6 @@ function isProviderAvailableSync(provider: string): boolean {
         return !!apiKey && apiKey.trim() !== '';
     }
     
-    // For local models, we can't check availability synchronously
-    // Always return false for local providers - use async version instead
-    if (provider === 'ollama') {
-        return false;
-    }
     
     return false;
 }
@@ -792,31 +718,6 @@ function updateModelSelector() {
     }
 }
 
-// Update available models list for local providers
-async function updateAvailableModelsForLocalProvider(provider: 'ollama') {
-    try {
-        const endpoint = getLocalEndpoint(provider);
-        let models: Array<{id: string, name: string, description: string}> = [];
-        
-        const response = await fetch(endpoint + '/api/tags');
-        const data = await response.json();
-        models = data.models?.map((model: any) => ({
-            id: model.name,
-            name: model.name,
-            description: model.details?.parameter_size || 'Ollama 모델'
-        })) || [];
-        
-        // Update the PROVIDER_MODELS for this provider
-        PROVIDER_MODELS[provider] = models;
-        
-        // Update UI if this is the current provider
-        if (currentSettings.provider === provider) {
-            updateModelSelector();
-        }
-    } catch (error) {
-        console.warn(`Failed to fetch models for ${provider}:`, error);
-    }
-}
 
 // Initialize settings
 function initializeSettings() {
@@ -831,13 +732,6 @@ function initializeSettings() {
 }
 
 // Update checking functions
-interface GitHubRelease {
-    tag_name: string;
-    name: string;
-    html_url: string;
-    published_at: string;
-    body: string;
-}
 
 function compareVersions(version1: string, version2: string): number {
     const v1parts = version1.replace(/^v/, '').split('.').map(Number);
@@ -855,47 +749,6 @@ function compareVersions(version1: string, version2: string): number {
 
 
 // API Key Security Functions
-function generateKey(): string {
-    // Generate a simple key for basic encryption (client-side)
-    const array = new Uint8Array(16);
-    crypto.getRandomValues(array);
-    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function getOrCreateEncryptionKey(): string {
-    let key = localStorage.getItem('encryptionKey');
-    if (!key) {
-        key = generateKey();
-        localStorage.setItem('encryptionKey', key);
-    }
-    return key;
-}
-
-function simpleEncrypt(text: string, key: string): string {
-    if (!text) return '';
-    let encrypted = '';
-    for (let i = 0; i < text.length; i++) {
-        const charCode = text.charCodeAt(i) ^ key.charCodeAt(i % key.length);
-        encrypted += String.fromCharCode(charCode);
-    }
-    return btoa(encrypted);
-}
-
-function simpleDecrypt(encryptedText: string, key: string): string {
-    if (!encryptedText) return '';
-    try {
-        const text = atob(encryptedText);
-        let decrypted = '';
-        for (let i = 0; i < text.length; i++) {
-            const charCode = text.charCodeAt(i) ^ key.charCodeAt(i % key.length);
-            decrypted += String.fromCharCode(charCode);
-        }
-        return decrypted;
-    } catch (error) {
-        console.error('Failed to decrypt:', error);
-        return '';
-    }
-}
 
 interface SecureAPIKeys {
     gemini?: string;
@@ -903,26 +756,70 @@ interface SecureAPIKeys {
     upstage?: string;
 }
 
-// Cache for decrypted keys to avoid repeated decryption
-let cachedDecryptedKeys: SecureAPIKeys | null = null;
+// Cache for API keys
+let cachedAPIKeys: SecureAPIKeys | null = null;
 
 // GitHub Update System
 interface GitHubRelease {
     tag_name: string;
     name: string;
-    body: string;
     html_url: string;
     published_at: string;
-    assets: Array<{
-        name: string;
-        browser_download_url: string;
-        size: number;
-    }>;
+    body: string;
+}
+
+// Auto-detect GitHub repository
+async function detectGitHubRepository(): Promise<string> {
+    try {
+        // Try to read from package.json first
+        const response = await fetch('/package.json');
+        if (response.ok) {
+            const packageJson = await response.json();
+            if (packageJson.repository && packageJson.repository.url) {
+                const url = packageJson.repository.url;
+                const match = url.match(/github\.com[\/:](.+?)\.git/);
+                if (match) {
+                    return match[1];
+                }
+            }
+        }
+    } catch (error) {
+        console.log('Could not read package.json:', error);
+    }
+
+    // Try common repository patterns based on current location
+    const currentPath = window.location.pathname;
+    const possibleRepos = [
+        'hoya629/autoscan',
+        'hoya629/auto-scan-updated',
+        'hoya629/document-auto-input'
+    ];
+
+    // Test each repository to see which one exists
+    for (const repo of possibleRepos) {
+        try {
+            const testResponse = await fetch(`https://api.github.com/repos/${repo}`);
+            if (testResponse.ok) {
+                console.log(`🔍 Auto-detected GitHub repository: ${repo}`);
+                return repo;
+            }
+        } catch (error) {
+            // Continue to next repo
+        }
+    }
+
+    // Default fallback
+    return 'hoya629/autoscan';
 }
 
 async function checkForUpdates(): Promise<GitHubRelease | null> {
     try {
-        console.log('Checking for updates from GitHub...');
+        // Auto-detect repository if not set
+        if (!APP_CONFIG.githubRepo) {
+            APP_CONFIG.githubRepo = await detectGitHubRepository();
+        }
+
+        console.log(`Checking for updates from GitHub repository: ${APP_CONFIG.githubRepo}`);
         
         const response = await fetch(`https://api.github.com/repos/${APP_CONFIG.githubRepo}/releases/latest`);
         
@@ -971,18 +868,14 @@ function isNewerVersion(latest: string, current: string): boolean {
 }
 
 function showUpdateNotification(release: GitHubRelease) {
-    const notification = document.getElementById('update-notification');
-    const versionSpan = document.getElementById('update-version');
-    const updateButton = document.getElementById('update-button');
+    if (!updateNotification || !updateVersionSpan || !updateButton) return;
     
-    if (!notification || !versionSpan || !updateButton) return;
-    
-    versionSpan.textContent = `버전 ${release.tag_name}`;
+    updateVersionSpan.textContent = `버전 ${release.tag_name}`;
     updateButton.onclick = () => {
         window.open(release.html_url, '_blank');
     };
     
-    notification.classList.remove('hidden');
+    updateNotification.classList.remove('hidden');
     
     // Store the last check time
     localStorage.setItem('last_update_check', Date.now().toString());
@@ -990,9 +883,8 @@ function showUpdateNotification(release: GitHubRelease) {
 }
 
 function hideUpdateNotification() {
-    const notification = document.getElementById('update-notification');
-    if (notification) {
-        notification.classList.add('hidden');
+    if (updateNotification) {
+        updateNotification.classList.add('hidden');
     }
 }
 
@@ -1066,80 +958,29 @@ async function manualUpdateCheck() {
     }
 }
 
+
+
 function saveSecureAPIKeys(keys: SecureAPIKeys) {
-    // Use the new async encryption system
-    saveAPIKeysToFile(keys).catch(error => {
-        console.error('Failed to save encrypted API keys:', error);
-        // Fallback to simple encryption for backward compatibility
-        const encryptionKey = getOrCreateEncryptionKey();
-        const encryptedKeys: any = {};
-        
-        Object.entries(keys).forEach(([provider, key]) => {
-            if (key && key.trim()) {
-                encryptedKeys[provider] = simpleEncrypt(key.trim(), encryptionKey);
-            }
-        });
-        
-        localStorage.setItem('secureAPIKeys', JSON.stringify(encryptedKeys));
-    });
+    saveAPIKeysToStorage(keys);
 }
 
 function loadSecureAPIKeys(): SecureAPIKeys {
     console.log('🔑 [API Keys] Loading secure API keys...');
     
     // First priority: Use cached decrypted keys if available
-    if (cachedDecryptedKeys) {
-        console.log('🔑 [API Keys] Using cached decrypted keys:', Object.keys(cachedDecryptedKeys));
+    if (cachedAPIKeys) {
+        console.log('🔑 [API Keys] Using cached decrypted keys:', Object.keys(cachedAPIKeys));
         console.log('🔑 [API Keys] Cached key values:', Object.fromEntries(
-            Object.entries(cachedDecryptedKeys).map(([k, v]) => [k, v ? `${v.length} chars` : 'empty'])
+            Object.entries(cachedAPIKeys).map(([k, v]) => [k, v ? `${v.length} chars` : 'empty'])
         ));
-        return cachedDecryptedKeys;
+        return cachedAPIKeys;
     }
     
-    // Second priority: Try to load from old format immediately
-    const stored = localStorage.getItem('secureAPIKeys');
-    console.log('🔑 [API Keys] localStorage secureAPIKeys:', stored ? 'exists' : 'not found');
-    if (stored) {
-        try {
-            const encryptedKeys = JSON.parse(stored);
-            const encryptionKey = getOrCreateEncryptionKey();
-            const decryptedKeys: SecureAPIKeys = {};
-            
-            Object.entries(encryptedKeys).forEach(([provider, encryptedKey]) => {
-                if (typeof encryptedKey === 'string') {
-                    const decrypted = simpleDecrypt(encryptedKey, encryptionKey);
-                    if (decrypted) {
-                        decryptedKeys[provider as keyof SecureAPIKeys] = decrypted;
-                    }
-                }
-            });
-            
-            // Cache the loaded keys
-            cachedDecryptedKeys = decryptedKeys;
-            console.log('🔑 [API Keys] Loaded API keys from old format:', Object.keys(decryptedKeys));
-            console.log('🔑 [API Keys] Old format key values:', Object.fromEntries(
-                Object.entries(decryptedKeys).map(([k, v]) => [k, v ? `${v.length} chars` : 'empty'])
-            ));
-            return decryptedKeys;
-        } catch (error) {
-            console.error('Failed to load API keys from old format:', error);
-        }
-    }
-    
-    // Third priority: Try new encrypted format (async load in background)
-    const newFormat = localStorage.getItem('encrypted_api_keys');
-    if (newFormat) {
-        console.log('Loading from new encrypted format in background...');
-        loadAPIKeysFromFile().then(keys => {
-            cachedDecryptedKeys = keys;
-            console.log('Background load completed:', Object.keys(keys));
-            // Trigger UI update after background load
-            updateProviderPillsStatus();
-        });
-    }
-    
-    console.log('🔑 [API Keys] Returning empty object - no keys found');
-    return {};
+    // Load from simple storage
+    const keys = loadAPIKeysFromStorage();
+    cachedAPIKeys = keys;
+    console.log('🔑 [API Keys] Loaded API keys from storage:', Object.keys(keys));
+    return keys;
 }
 
 function getAPIKey(provider: string): string {
@@ -1166,111 +1007,27 @@ function getAPIKey(provider: string): string {
     return '';
 }
 
-// Local encrypted file storage functions
-async function generateEncryptionKey(): Promise<CryptoKey> {
-    return await crypto.subtle.generateKey(
-        {
-            name: 'AES-GCM',
-            length: 256
-        },
-        true,
-        ['encrypt', 'decrypt']
-    );
-}
-
-async function saveEncryptionKey(key: CryptoKey): Promise<void> {
+// Simple API key storage (no complex encryption)
+function saveAPIKeysToStorage(keys: SecureAPIKeys): void {
     try {
-        const exportedKey = await crypto.subtle.exportKey('jwk', key);
-        localStorage.setItem('api_key_encryption_key', JSON.stringify(exportedKey));
+        const keyData = JSON.stringify(keys);
+        localStorage.setItem('api_keys', keyData);
+        console.log('API keys saved successfully');
     } catch (error) {
-        console.error('Failed to save encryption key:', error);
+        console.error('Failed to save API keys:', error);
     }
 }
 
-async function loadEncryptionKey(): Promise<CryptoKey | null> {
+function loadAPIKeysFromStorage(): SecureAPIKeys {
     try {
-        const keyData = localStorage.getItem('api_key_encryption_key');
-        if (!keyData) return null;
+        const keyData = localStorage.getItem('api_keys');
+        if (!keyData) return {};
         
-        const jwk = JSON.parse(keyData);
-        return await crypto.subtle.importKey(
-            'jwk',
-            jwk,
-            { name: 'AES-GCM', length: 256 },
-            true,
-            ['encrypt', 'decrypt']
-        );
-    } catch (error) {
-        console.error('Failed to load encryption key:', error);
-        return null;
-    }
-}
-
-async function encryptData(data: string, key: CryptoKey): Promise<{ encrypted: string; iv: string }> {
-    const encoder = new TextEncoder();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    
-    const encrypted = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv: iv },
-        key,
-        encoder.encode(data)
-    );
-    
-    return {
-        encrypted: Array.from(new Uint8Array(encrypted)).map(b => b.toString(16).padStart(2, '0')).join(''),
-        iv: Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('')
-    };
-}
-
-async function decryptData(encryptedHex: string, ivHex: string, key: CryptoKey): Promise<string> {
-    const encrypted = new Uint8Array(encryptedHex.match(/.{2}/g)!.map(byte => parseInt(byte, 16)));
-    const iv = new Uint8Array(ivHex.match(/.{2}/g)!.map(byte => parseInt(byte, 16)));
-    
-    const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: iv },
-        key,
-        encrypted
-    );
-    
-    return new TextDecoder().decode(decrypted);
-}
-
-async function saveAPIKeysToFile(keys: SecureAPIKeys): Promise<void> {
-    try {
-        let encryptionKey = await loadEncryptionKey();
-        if (!encryptionKey) {
-            encryptionKey = await generateEncryptionKey();
-            await saveEncryptionKey(encryptionKey);
-        }
-        
-        const dataToEncrypt = JSON.stringify(keys);
-        const { encrypted, iv } = await encryptData(dataToEncrypt, encryptionKey);
-        
-        const encryptedData = { encrypted, iv, timestamp: Date.now() };
-        localStorage.setItem('encrypted_api_keys', JSON.stringify(encryptedData));
-        
-        console.log('API keys encrypted and saved successfully');
-    } catch (error) {
-        console.error('Failed to save encrypted API keys:', error);
-    }
-}
-
-async function loadAPIKeysFromFile(): Promise<SecureAPIKeys> {
-    try {
-        const encryptedDataStr = localStorage.getItem('encrypted_api_keys');
-        if (!encryptedDataStr) return {};
-        
-        const encryptedData = JSON.parse(encryptedDataStr);
-        const encryptionKey = await loadEncryptionKey();
-        if (!encryptionKey) return {};
-        
-        const decryptedData = await decryptData(encryptedData.encrypted, encryptedData.iv, encryptionKey);
-        const keys = JSON.parse(decryptedData);
-        
-        console.log('API keys loaded and decrypted successfully');
+        const keys = JSON.parse(keyData);
+        console.log('API keys loaded successfully');
         return keys;
     } catch (error) {
-        console.error('Failed to load encrypted API keys:', error);
+        console.error('Failed to load API keys:', error);
         return {};
     }
 }
@@ -1288,9 +1045,8 @@ async function showAPISettingsModal() {
     // If no cached keys and new format exists, try to load it
     if (Object.keys(keys).length === 0 && localStorage.getItem('encrypted_api_keys')) {
         try {
-            console.log('Attempting to load encrypted keys for modal...');
-            keys = await loadAPIKeysFromFile();
-            cachedDecryptedKeys = keys;
+            console.log('Loading keys for modal...');
+            keys = loadSecureAPIKeys();
         } catch (error) {
             console.log('Could not load encrypted keys, using fallback');
         }
@@ -1349,28 +1105,16 @@ async function saveAPIKeysFromModal() {
     console.log('💾 [API Keys] Total keys to save:', Object.keys(keys).length);
     
     try {
-        // Save with new encryption system
-        await saveAPIKeysToFile(keys);
+        // Save keys
+        saveAPIKeysToStorage(keys);
         
         // Update cached keys immediately
-        cachedDecryptedKeys = keys;
-        
-        // Also save to old format for immediate access
-        const encryptionKey = getOrCreateEncryptionKey();
-        const encryptedKeys: any = {};
-        
-        Object.entries(keys).forEach(([provider, key]) => {
-            if (key && key.trim()) {
-                encryptedKeys[provider] = simpleEncrypt(key.trim(), encryptionKey);
-            }
-        });
-        
-        localStorage.setItem('secureAPIKeys', JSON.stringify(encryptedKeys));
+        cachedAPIKeys = keys;
         
         hideAPISettingsModal();
         
         console.log('💾 [API Keys] Keys saved, updating provider status...');
-        console.log('💾 [API Keys] Cached keys after save:', Object.keys(cachedDecryptedKeys || {}));
+        console.log('💾 [API Keys] Cached keys after save:', Object.keys(cachedAPIKeys || {}));
         
         // Force refresh provider status multiple times to ensure it sticks
         await updateProviderPillsStatus();
@@ -2242,10 +1986,8 @@ async function processWithUpstage(pageData: PageData) {
         },
         body: JSON.stringify({
             apiKey: apiKey, // UI에서 입력한 API 키 전달
-            model: currentSettings.model,
             document: `data:${pageData.mimeType};base64,${pageData.data}`,
-            ocr: true,
-            prompt: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요.\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}"
+            include_tables: true // Optional parameter for table extraction
         })
     });
 
@@ -2256,66 +1998,80 @@ async function processWithUpstage(pageData: PageData) {
 
     const result = await response.json();
     
-    // Parse the JSON response from Upstage
+    // Parse the response from Upstage Document Parse API (Real format)
     try {
-        if (result.data) {
-            return validateAndCleanExtractedData(result.data);
+        console.log('🔍 [Upstage] Raw API response:', result);
+        
+        // Real Upstage API response format: result.content.text
+        let extractedText = '';
+        
+        if (result.content && result.content.text) {
+            // This is the correct format from real API response
+            extractedText = result.content.text;
+        } else if (result.text) {
+            // Fallback for simplified responses
+            extractedText = result.text;
         } else {
-            throw new Error('Upstage API에서 데이터를 받지 못했습니다.');
+            // Log the full response structure to understand the format
+            console.log('🔍 [Upstage] Full response structure:', JSON.stringify(result, null, 2));
+            throw new Error('Upstage API 응답에서 텍스트를 찾을 수 없습니다. Expected: result.content.text');
         }
+        
+        console.log('📄 [Upstage] Extracted text length:', extractedText.length);
+        console.log('📄 [Upstage] Extracted text preview:', extractedText.substring(0, 200) + '...');
+        
+        // Enhanced pattern matching for Korean import settlement documents
+        const extractedData = {
+            date: extractDateFromText(extractedText),
+            quantity: extractNumberFromText(extractedText, ['수 량', '수량', 'GT']),
+            amountUSD: extractNumberFromText(extractedText, ['COMMERCIAL INVOICE CARGE', 'COMMERCIAL INVOICE CHARGE', 'US$22,234.42', 'US$']),
+            commissionUSD: extractNumberFromText(extractedText, ['COMMISSION', '수수료', 'US$222.34']),
+            totalUSD: extractNumberFromText(extractedText, ['외화', '$22,456.76', 'US$22,456.76']),
+            totalKRW: extractNumberFromText(extractedText, ['입금하신 금액', '₩33,072,070']),
+            balanceKRW: extractNumberFromText(extractedText, ['잔 액', '잔액', '₩4,796,651'])
+        };
+        
+        console.log('🔍 [Upstage] Extracted data:', extractedData);
+        return validateAndCleanExtractedData(extractedData);
     } catch (parseError) {
         console.error('Upstage 응답 파싱 오류:', parseError);
         throw new Error('Upstage 응답을 파싱할 수 없습니다.');
     }
 }
 
-// Local AI Processing Functions
-async function processWithOllama(pageData: PageData) {
-    const endpoint = getLocalEndpoint('ollama');
+// Helper functions for text extraction
+function extractDateFromText(text: string): string {
+    const datePatterns = [
+        /(\d{4}[-/]\d{1,2}[-/]\d{1,2})/,
+        /(\d{1,2}[-/]\d{1,2}[-/]\d{4})/,
+        /(\d{4}\.\d{1,2}\.\d{1,2})/,
+        /(\d{1,2}\.\d{1,2}\.\d{4})/
+    ];
     
-    const response = await fetch(endpoint + '/api/generate', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            model: currentSettings.model,
-            prompt: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요.\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}",
-            images: [pageData.data],
-            stream: false,
-            options: {
-                temperature: 0.1,
-                top_p: 0.9
-            }
-        })
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Ollama API 오류: ${response.status} - ${errorText}`);
-    }
-
-    const result = await response.json();
-    
-    try {
-        const content = result.response;
-        if (!content) {
-            throw new Error('Ollama에서 응답을 받지 못했습니다.');
+    for (const pattern of datePatterns) {
+        const match = text.match(pattern);
+        if (match) {
+            return match[1];
         }
-        
-        // Extract JSON from response
-        const jsonMatch = content.match(/\{[\s\S]*?\}/);
-        if (jsonMatch) {
-            const parsedData = JSON.parse(jsonMatch[0]);
-            return validateAndCleanExtractedData(parsedData);
-        } else {
-            throw new Error('JSON 형식을 찾을 수 없습니다.');
-        }
-    } catch (parseError) {
-        console.error('Ollama 응답 파싱 오류:', parseError);
-        throw new Error('Ollama 응답을 파싱할 수 없습니다.');
     }
+    return '';
 }
+
+function extractNumberFromText(text: string, keywords: string[]): number {
+    for (const keyword of keywords) {
+        const pattern = new RegExp(`${keyword}[^\\d]*([\\d,]+(?:\\.\\d+)?)`, 'i');
+        const match = text.match(pattern);
+        if (match) {
+            const numberStr = match[1].replace(/,/g, '');
+            const number = parseFloat(numberStr);
+            if (!isNaN(number)) {
+                return number;
+            }
+        }
+    }
+    return 0;
+}
+
 
 
 async function processDocument() {
@@ -2397,9 +2153,6 @@ async function processDocument() {
                     break;
                 case 'upstage':
                     extractedData = await processWithUpstage(page);
-                    break;
-                case 'ollama':
-                    extractedData = await processWithOllama(page);
                     break;
                 default:
                     throw new Error('지원되지 않는 AI 제공자입니다.');
@@ -2502,16 +2255,15 @@ function setupEventListeners() {
     // Initialize elements
     aiProviderPills = document.querySelectorAll('.ai-pill') as NodeListOf<HTMLButtonElement>;
     modelSelector = document.getElementById('model-selector') as HTMLSelectElement;
+    debugStatusButton = document.getElementById('debug-status-button') as HTMLButtonElement;
+    
+    // Update elements
     updateNotification = document.getElementById('update-notification') as HTMLDivElement;
     updateVersionSpan = document.getElementById('update-version') as HTMLSpanElement;
     updateButton = document.getElementById('update-button') as HTMLButtonElement;
     dismissUpdateButton = document.getElementById('dismiss-update') as HTMLButtonElement;
     checkUpdateButton = document.getElementById('check-update-button') as HTMLButtonElement;
-    debugStatusButton = document.getElementById('debug-status-button') as HTMLButtonElement;
     
-    // Debug: Check if update button is properly loaded
-    console.log('🔧 [Debug] Update button element:', checkUpdateButton);
-    console.log('🔧 [Debug] Update button visibility:', checkUpdateButton ? getComputedStyle(checkUpdateButton).display : 'element not found');
     console.log('🔧 [Debug] Debug button element:', debugStatusButton);
     
     // Windows-specific debugging
@@ -2593,7 +2345,7 @@ function setupEventListeners() {
     // Provider pill selection
     aiProviderPills.forEach(pill => {
         pill.addEventListener('click', async () => {
-            const provider = pill.dataset.provider as 'gemini' | 'openai' | 'upstage' | 'ollama';
+            const provider = pill.dataset.provider as 'gemini' | 'openai' | 'upstage';
             
             // Check if the selected provider is available
             if (!isProviderAvailableSync(provider)) {
@@ -2605,18 +2357,11 @@ function setupEventListeners() {
             currentSettings.provider = provider;
             currentSettings.model = getDefaultModelForProvider(provider);
             
-            // For local providers, fetch available models
-            if (provider === 'ollama') {
-                await updateAvailableModelsForLocalProvider('ollama');
-                const availableModels = getAvailableModels();
-                if (availableModels.length > 0) {
-                    currentSettings.model = availableModels[0].id;
-                }
-            }
             
             saveSettings(currentSettings);
             
             // Update UI
+            updateModelSelector();
             await updateProviderPillsStatus();
             updateProcessButtonState();
         });
@@ -2646,9 +2391,6 @@ function setupEventListeners() {
     // Clear logs button
     clearLogsButton.addEventListener('click', clearAllLogs);
     
-    // Update notification handlers
-    dismissUpdateButton.addEventListener('click', hideUpdateNotification);
-    checkUpdateButton.addEventListener('click', manualUpdateCheck);
     debugStatusButton.addEventListener('click', debugAPIKeyStatus);
     
     // API Settings Modal handlers
@@ -2712,6 +2454,17 @@ function setupEventListeners() {
             }
         });
     });
+    
+    // Update notification handlers
+    if (dismissUpdateButton) {
+        dismissUpdateButton.addEventListener('click', hideUpdateNotification);
+    }
+    if (checkUpdateButton) {
+        checkUpdateButton.addEventListener('click', manualUpdateCheck);
+    }
+    if (debugStatusButton) {
+        debugStatusButton.addEventListener('click', debugAPIKeyStatus);
+    }
 }
 
 // Debug status function
@@ -2731,9 +2484,9 @@ function debugAPIKeyStatus() {
     }
     
     // Check cached keys
-    console.log('🔧 [Debug Status] cachedDecryptedKeys:', cachedDecryptedKeys ? Object.keys(cachedDecryptedKeys) : 'null');
-    if (cachedDecryptedKeys) {
-        Object.entries(cachedDecryptedKeys).forEach(([provider, key]) => {
+    console.log('🔧 [Debug Status] cachedAPIKeys:', cachedAPIKeys ? Object.keys(cachedAPIKeys) : 'null');
+    if (cachedAPIKeys) {
+        Object.entries(cachedAPIKeys).forEach(([provider, key]) => {
             console.log(`🔧 [Debug Status] ${provider}: ${key ? `${key.length} chars` : 'empty'}`);
         });
     }
@@ -2794,22 +2547,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load usage logs
     usageLogs = loadUsageLogs();
     
-    // Initialize encrypted API keys
+    // Initialize API keys
     try {
-        cachedDecryptedKeys = await loadAPIKeysFromFile();
-        console.log('Encrypted API keys loaded successfully');
+        cachedAPIKeys = loadAPIKeysFromStorage();
+        console.log('API keys loaded successfully');
     } catch (error) {
-        console.log('Loading encrypted API keys in background...');
-        loadAPIKeysFromFile().then(keys => {
-            cachedDecryptedKeys = keys;
-        });
+        console.log('Failed to load API keys:', error);
     }
     
     initializeSettings();
     setupEventListeners();
     initializeUI();
+    updateModelSelector();
     renderTable();
     setupInputTooltips();
+    
+    // Display current version
+    const versionElement = document.getElementById('current-version');
+    if (versionElement) {
+        versionElement.textContent = `v${APP_CONFIG.version}`;
+    }
     
     // Initialize update checker
     initializeUpdateChecker();

@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.1",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hoya629/auto-scan-updated.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -16,6 +20,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
+    "form-data": "^4.0.4",
     "nodemon": "^3.1.10",
     "openai": "^4.28.0",
     "pdfjs-dist": "4.4.168"

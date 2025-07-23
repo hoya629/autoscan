@@ -21,7 +21,7 @@
 <body>
     <div id="app-container">
         <header>
-            <h1>문서 자동 입력 시스템</h1>
+            <h1>문서 자동 입력 시스템 <span id="current-version" class="version-badge"></span></h1>
             <p>이미지나 PDF 문서를 업로드하여 정산 내역을 자동으로 추출하고 관리하세요.</p>
             <div id="update-notification" class="update-notification hidden">
                 <div class="update-content">
@@ -53,10 +53,6 @@
                         <button class="ai-pill" data-provider="upstage">
                             <span class="pill-status"></span>
                             <span class="pill-text">Upstage</span>
-                        </button>
-                        <button class="ai-pill" data-provider="ollama">
-                            <span class="pill-status"></span>
-                            <span class="pill-text">Ollama</span>
                         </button>
                     </div>
                 </div>

@@ -52,6 +52,19 @@ header p {
     color: var(--on-surface-variant-color);
 }
 
+.version-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
 .update-notification {
     position: absolute;
     top: 100%;

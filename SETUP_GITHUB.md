@@ -128,9 +128,9 @@ gh release create v1.0.0 \
 
 3. **새 릴리스 생성**
    ```bash
-   git tag v1.1.0
+   git tag v1.0.1
    git push --tags
-   gh release create v1.1.0 --generate-notes
+   gh release create v1.0.1 --title "Auto Document Input System v1 --generate-notes
    ```
 
 4. **사용자들은 자동으로 업데이트 알림을 받음**

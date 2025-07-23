@@ -15,49 +15,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 
-// Claude API 프록시
-app.post('/api/claude', async (req, res) => {
-    try {
-        // 1순위: 요청에서 전달된 API 키
-        const apiKey = req.body.apiKey || req.headers['x-api-key'] || process.env.VITE_CLAUDE_API_KEY;
-        console.log('Claude API Key source:', req.body.apiKey ? 'request body' : req.headers['x-api-key'] ? 'header' : 'env');
-        console.log('Claude API Key length:', apiKey?.length || 0);
-        console.log('Claude API Key prefix:', apiKey?.substring(0, 10) || 'none');
-        
-        if (!apiKey || apiKey.includes('input_your_api_key')) {
-            return res.status(400).json({ error: 'Claude API key not configured' });
-        }
-
-        // Map model names to actual Claude API model names
-        const modelMapping = {
-            'claude-sonnet-4-20250514': 'claude-sonnet-4-20250514',
-            'claude-opus-4-20250514': 'claude-opus-4-20250514', 
-            'claude-3-5-sonnet-20241022': 'claude-3-5-sonnet-20241022'
-        };
-        
-        const actualModel = modelMapping[req.body.model] || 'claude-sonnet-4-20250514';
-        
-        const response = await axios.post('https://api.anthropic.com/v1/messages', {
-            model: actualModel,
-            max_tokens: 4000,
-            messages: req.body.messages
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': apiKey,
-                'anthropic-version': '2023-06-01'
-            }
-        });
-
-        res.json(response.data);
-    } catch (error) {
-        console.error('Claude API error:', error.response?.data || error.message);
-        res.status(error.response?.status || 500).json({
-            error: `Claude API error: ${error.response?.status || 500}`,
-            details: error.response?.data?.error?.message || error.message
-        });
-    }
-});
 
 // OpenAI API 프록시
 app.post('/api/openai', async (req, res) => {
@@ -151,7 +108,7 @@ app.post('/api/upstage', async (req, res) => {
         const isDocVision = requestBody.model === 'solar-docvision-preview';
         const apiEndpoint = isDocVision 
             ? 'https://api.upstage.ai/v1/solar/chat/completions'
-            : 'https://api.upstage.ai/v1/document-digitization';
+            : 'https://api.upstage.ai/v1/document-ai/document-parse';
 
         let response;
         if (isDocVision) {
@@ -163,13 +120,95 @@ app.post('/api/upstage', async (req, res) => {
                 }
             });
         } else {
-            // Document Parse API uses form data
-            response = await axios.post(apiEndpoint, requestBody, {
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': req.headers['content-type'] || 'application/json'
-                }
+            // Document Parse API uses multipart/form-data
+            const FormData = require('form-data');
+            const formData = new FormData();
+            
+            console.log('🔍 [Upstage Proxy] Processing document data...');
+            console.log('🔍 [Upstage Proxy] Full request body:', JSON.stringify(requestBody, null, 2));
+            
+            // Extract document data from base64
+            if (requestBody.document && requestBody.document.startsWith('data:')) {
+                const [header, base64Data] = requestBody.document.split(',');
+                const mimeType = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg';
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                console.log('🔍 [Upstage Proxy] Document info:', {
+                    mimeType,
+                    bufferSize: buffer.length,
+                    base64Length: base64Data.length,
+                    headerInfo: header
+                });
+                
+                // Use the field name 'document' as expected by the API
+                // Specify proper file options with contentType for multipart
+                const extension = mimeType.includes('pdf') ? 'pdf' : 
+                                 mimeType.includes('png') ? 'png' : 
+                                 mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'jpg';
+                const filename = `document.${extension}`;
+                
+                formData.append('document', buffer, {
+                    filename: filename,
+                    contentType: mimeType,
+                    knownLength: buffer.length
+                });
+                
+                console.log('📤 [Upstage Proxy] FormData field added - document');
+            } else if (requestBody.document) {
+                console.log('⚠️ [Upstage Proxy] Document format not recognized:', requestBody.document.substring(0, 50));
+                throw new Error('Document data must be in base64 data URL format');
+            } else {
+                console.log('❌ [Upstage Proxy] No document field found in request');
+                throw new Error('Document field is required');
+            }
+            
+            // Add Upstage Document Parse API specific parameters based on REAL working format
+            // Model parameter (required)
+            formData.append('model', 'document-parse');
+            console.log('📤 [Upstage Proxy] FormData field added - model: document-parse');
+            
+            // OCR parameter: 'auto' is the correct value from working example
+            formData.append('ocr', 'auto');
+            console.log('📤 [Upstage Proxy] FormData field added - ocr: auto');
+            
+            // Output formats: Only text format as per working example
+            formData.append('output_formats', '["text"]');
+            console.log('📤 [Upstage Proxy] FormData field added - output_formats: ["text"]');
+            
+            // Log the complete form data structure
+            console.log('🚀 [Upstage Proxy] Sending request to:', apiEndpoint);
+            console.log('🚀 [Upstage Proxy] Request headers will include:', {
+                'Authorization': `Bearer ${apiKey.substring(0, 10)}...`,
+                'Content-Type': formData.getHeaders()['content-type']
             });
+            
+            try {
+                response = await axios.post(apiEndpoint, formData, {
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        ...formData.getHeaders()
+                    },
+                    timeout: 120000, // 2 minutes timeout for document processing
+                    maxBodyLength: Infinity,
+                    maxContentLength: Infinity
+                });
+                
+                console.log('✅ [Upstage Proxy] Response received:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    contentType: response.headers['content-type'],
+                    dataKeys: response.data ? Object.keys(response.data) : 'no data'
+                });
+            } catch (axiosError) {
+                console.error('❌ [Upstage Proxy] Axios error details:', {
+                    status: axiosError.response?.status,
+                    statusText: axiosError.response?.statusText,
+                    headers: axiosError.response?.headers,
+                    data: axiosError.response?.data,
+                    message: axiosError.message
+                });
+                throw axiosError;
+            }
         }
 
         res.json(response.data);
