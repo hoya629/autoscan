@@ -596,13 +596,12 @@ let saveApiKeysButton: HTMLButtonElement;
 let cancelApiSettingsButton: HTMLButtonElement;
 let geminiKeyInput: HTMLInputElement;
 let openaiKeyInput: HTMLInputElement;
-let claudeKeyInput: HTMLInputElement;
 let upstageKeyInput: HTMLInputElement;
 
 // Check if provider is available (proxy server or local endpoint)
 async function isProviderAvailable(provider: string): Promise<boolean> {
     // First check if API key is available for all providers except local ones
-    if (['gemini', 'openai', 'upstage', 'claude'].includes(provider)) {
+    if (['gemini', 'openai', 'upstage'].includes(provider)) {
         const apiKey = getAPIKey(provider);
         console.log(`[Provider Check] ${provider} API key available:`, !!apiKey, `(key: "${apiKey}")`);
         if (!apiKey || apiKey.trim() === '') {
@@ -645,21 +644,28 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
     if (provider === 'ollama') {
         try {
             const endpoint = getLocalEndpoint(provider);
-            if (!endpoint) return false;
+            if (!endpoint) {
+                console.log(`🔍 [Provider Check] ${provider} endpoint not configured`);
+                return false;
+            }
             
             const healthEndpoint = '/api/tags';
             
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 1000);
             
+            console.log(`🔍 [Provider Check] ${provider} testing endpoint: ${endpoint + healthEndpoint}`);
             const response = await fetch(endpoint + healthEndpoint, {
                 method: 'GET',
                 signal: controller.signal
             });
             
             clearTimeout(timeoutId);
-            return response.ok;
+            const isOk = response.ok;
+            console.log(`🔍 [Provider Check] ${provider} endpoint test result: ${isOk} (status: ${response.status})`);
+            return isOk;
         } catch (error) {
+            console.log(`🔍 [Provider Check] ${provider} endpoint test failed:`, error.message);
             return false;
         }
     }
@@ -670,15 +676,15 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
 // Synchronous version for backward compatibility
 function isProviderAvailableSync(provider: string): boolean {
     // For proxy server providers, check if API key is available
-    if (['gemini', 'openai', 'upstage', 'claude'].includes(provider)) {
+    if (['gemini', 'openai', 'upstage'].includes(provider)) {
         const apiKey = getAPIKey(provider);
         return !!apiKey && apiKey.trim() !== '';
     }
     
-    // For local models, check if endpoint is configured
+    // For local models, we can't check availability synchronously
+    // Always return false for local providers - use async version instead
     if (provider === 'ollama') {
-        const endpoint = getLocalEndpoint(provider);
-        return !!endpoint;
+        return false;
     }
     
     return false;
@@ -688,10 +694,15 @@ function isProviderAvailableSync(provider: string): boolean {
 async function updateProviderPillsStatus() {
     if (!aiProviderPills) return;
     
+    console.log('🔄 [Provider Status] Starting provider status update...');
+    
     for (const pill of aiProviderPills) {
         const provider = pill.dataset.provider as string;
         const statusIndicator = pill.querySelector('.pill-status') as HTMLElement;
+        
+        console.log(`🔍 [Provider Status] Checking ${provider}...`);
         const isAvailable = await isProviderAvailable(provider);
+        console.log(`📊 [Provider Status] ${provider} available: ${isAvailable}`);
         
         // Remove existing classes
         pill.classList.remove('active', 'available', 'unavailable');
@@ -699,9 +710,11 @@ async function updateProviderPillsStatus() {
         
         // Update availability status
         if (isAvailable) {
+            console.log(`✅ [Provider Status] Setting ${provider} as AVAILABLE`);
             pill.classList.add('available');
             statusIndicator.classList.add('available');
         } else {
+            console.log(`❌ [Provider Status] Setting ${provider} as UNAVAILABLE`);
             pill.classList.add('unavailable');
             statusIndicator.classList.add('unavailable');
         }
@@ -712,8 +725,7 @@ async function updateProviderPillsStatus() {
         }
     }
     
-    // Update model selector
-    updateModelSelector();
+    console.log('✅ [Provider Status] Provider status update completed');
 }
 
 // Update model selector based on current provider
@@ -862,7 +874,6 @@ function simpleDecrypt(encryptedText: string, key: string): string {
 interface SecureAPIKeys {
     gemini?: string;
     openai?: string;
-    claude?: string;
     upstage?: string;
 }
 
@@ -1048,14 +1059,20 @@ function saveSecureAPIKeys(keys: SecureAPIKeys) {
 }
 
 function loadSecureAPIKeys(): SecureAPIKeys {
+    console.log('🔑 [API Keys] Loading secure API keys...');
+    
     // First priority: Use cached decrypted keys if available
     if (cachedDecryptedKeys) {
-        console.log('Using cached decrypted keys:', Object.keys(cachedDecryptedKeys));
+        console.log('🔑 [API Keys] Using cached decrypted keys:', Object.keys(cachedDecryptedKeys));
+        console.log('🔑 [API Keys] Cached key values:', Object.fromEntries(
+            Object.entries(cachedDecryptedKeys).map(([k, v]) => [k, v ? `${v.length} chars` : 'empty'])
+        ));
         return cachedDecryptedKeys;
     }
     
     // Second priority: Try to load from old format immediately
     const stored = localStorage.getItem('secureAPIKeys');
+    console.log('🔑 [API Keys] localStorage secureAPIKeys:', stored ? 'exists' : 'not found');
     if (stored) {
         try {
             const encryptedKeys = JSON.parse(stored);
@@ -1073,7 +1090,10 @@ function loadSecureAPIKeys(): SecureAPIKeys {
             
             // Cache the loaded keys
             cachedDecryptedKeys = decryptedKeys;
-            console.log('Loaded API keys from old format:', Object.keys(decryptedKeys));
+            console.log('🔑 [API Keys] Loaded API keys from old format:', Object.keys(decryptedKeys));
+            console.log('🔑 [API Keys] Old format key values:', Object.fromEntries(
+                Object.entries(decryptedKeys).map(([k, v]) => [k, v ? `${v.length} chars` : 'empty'])
+            ));
             return decryptedKeys;
         } catch (error) {
             console.error('Failed to load API keys from old format:', error);
@@ -1092,6 +1112,7 @@ function loadSecureAPIKeys(): SecureAPIKeys {
         });
     }
     
+    console.log('🔑 [API Keys] Returning empty object - no keys found');
     return {};
 }
 
@@ -1261,7 +1282,6 @@ async function showAPISettingsModal() {
     
     if (geminiKeyInput) geminiKeyInput.value = getDisplayKey('gemini');
     if (openaiKeyInput) openaiKeyInput.value = getDisplayKey('openai');
-    if (claudeKeyInput) claudeKeyInput.value = getDisplayKey('claude');
     if (upstageKeyInput) upstageKeyInput.value = getDisplayKey('upstage');
     
     console.log('Modal populated with keys:', Object.keys(keys));
@@ -1280,7 +1300,6 @@ function hideAPISettingsModal() {
     // Clear input values for security
     if (geminiKeyInput) geminiKeyInput.value = '';
     if (openaiKeyInput) openaiKeyInput.value = '';
-    if (claudeKeyInput) claudeKeyInput.value = '';
     if (upstageKeyInput) upstageKeyInput.value = '';
 }
 
@@ -1289,7 +1308,6 @@ async function saveAPIKeysFromModal() {
     
     if (geminiKeyInput?.value.trim()) keys.gemini = geminiKeyInput.value.trim();
     if (openaiKeyInput?.value.trim()) keys.openai = openaiKeyInput.value.trim();
-    if (claudeKeyInput?.value.trim()) keys.claude = claudeKeyInput.value.trim();
     if (upstageKeyInput?.value.trim()) keys.upstage = upstageKeyInput.value.trim();
     
     try {
@@ -1336,7 +1354,7 @@ function initializeAPIKeysFromEnv() {
     
     // Import .env keys to UI storage for first-time users
     const envKeys: SecureAPIKeys = {};
-    const providers = ['gemini', 'openai', 'claude', 'upstage'];
+    const providers = ['gemini', 'openai', 'upstage'];
     
     providers.forEach(provider => {
         const envKey = (import.meta as any).env?.[`VITE_${provider.toUpperCase()}_API_KEY`];
@@ -1942,8 +1960,8 @@ async function processWithGemini(pageData: PageData) {
 
     try {
         const apiKey = getAPIKey('gemini');
-        if (!apiKey) {
-            throw new Error('Gemini API key not found');
+        if (!apiKey || apiKey.trim() === '') {
+            throw new Error('Gemini API key not configured. Please set your API key in the settings.');
         }
 
         console.log('Sending request directly to Gemini API...');
@@ -2294,7 +2312,6 @@ function setupEventListeners() {
     cancelApiSettingsButton = document.getElementById('cancel-api-settings') as HTMLButtonElement;
     geminiKeyInput = document.getElementById('gemini-key') as HTMLInputElement;
     openaiKeyInput = document.getElementById('openai-key') as HTMLInputElement;
-    claudeKeyInput = document.getElementById('claude-key') as HTMLInputElement;
     upstageKeyInput = document.getElementById('upstage-key') as HTMLInputElement;
     // File handling
     dropZone.addEventListener('click', () => fileInput.click());
