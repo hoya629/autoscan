@@ -215,6 +215,102 @@ header p {
     }
 }
 
+/* Delete Confirmation Modal */
+.delete-modal {
+    max-width: 400px;
+    width: 90%;
+}
+
+.delete-preview {
+    background-color: var(--background-color);
+    padding: 1rem;
+    border-radius: 6px;
+    margin-top: 1rem;
+    border-left: 4px solid var(--error-color);
+}
+
+#delete-page-name {
+    font-weight: 500;
+    color: var(--on-surface-color);
+    font-size: 0.95rem;
+}
+
+.delete-btn {
+    background-color: var(--error-color);
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.delete-btn:hover {
+    background-color: #d93025;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(217, 48, 37, 0.3);
+}
+
+/* Undo Notification */
+.undo-notification {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--on-surface-color);
+    color: var(--surface-color);
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    z-index: 1001;
+    animation: slideUp 0.3s ease-out;
+}
+
+.undo-notification.fade-out {
+    animation: fadeOut 0.3s ease-out forwards;
+}
+
+.undo-content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+#undo-button {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+#undo-button:hover {
+    background-color: #3367d6;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(100%);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+@keyframes fadeOut {
+    to {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+}
+
 .modal-header {
     display: flex;
     align-items: center;
@@ -745,27 +841,48 @@ button svg {
     position: absolute;
     top: -8px;
     right: -8px;
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
     background-color: var(--error-color);
     color: white;
-    border: none;
+    border: 2px solid white;
     cursor: pointer;
     display: none;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: bold;
     z-index: 10;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 8px rgba(217, 48, 37, 0.3);
 }
 
 .pdf-page-item:hover .pdf-page-remove {
     display: flex;
+    animation: fadeInScale 0.2s ease-out;
+}
+
+@keyframes fadeInScale {
+    0% {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 .pdf-page-remove:hover {
     background-color: #d93025;
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(217, 48, 37, 0.4);
+}
+
+.pdf-page-remove:active {
+    transform: scale(0.95);
+    transition: transform 0.1s ease;
 }
 
 .table-container {

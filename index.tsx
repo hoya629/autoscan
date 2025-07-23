@@ -59,6 +59,27 @@ interface ModelStats {
     preferenceScore: number; // (likes - dislikes) / totalUsage
 }
 
+interface DeleteAction {
+    pageData: PageData;
+    timestamp: number;
+}
+
+// Delete history for undo functionality
+const deleteHistory: DeleteAction[] = [];
+const MAX_UNDO_HISTORY = 10;
+
+// Cache system for AI responses
+interface CacheEntry {
+    hash: string;
+    provider: string;
+    model: string;
+    data: any;
+    timestamp: number;
+}
+
+const AI_CACHE_KEY = 'ai_response_cache';
+const CACHE_EXPIRY_DAYS = 7; // 7일 후 만료
+
 // Pricing information (USD per 1M tokens) - Updated for 2025
 const MODEL_PRICING = {
     // Gemini pricing
@@ -125,7 +146,7 @@ const PROVIDER_MODELS = {
 // Application configuration
 const APP_CONFIG = {
     version: '1.0.0',
-    githubRepo: 'your-username/auto-scan-app', // TODO: Replace with actual GitHub repository
+    githubRepo: 'hoya629/autoscan', // TODO: Replace with actual GitHub repository
     checkForUpdates: true
 };
 
@@ -582,8 +603,10 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
             });
             
             clearTimeout(timeoutId);
+            console.log(`Proxy server health response for ${provider}: ${response.status}`);
             return response.ok;
         } catch (error) {
+            console.error(`Proxy server health check failed for ${provider}:`, error);
             return false;
         }
     }
@@ -1014,7 +1037,19 @@ function initializeUI() {
 function updateProcessButtonState() {
     const hasApiKey = isProviderAvailableSync(currentSettings.provider);
     const hasSelectedPages = selectedPages.length > 0;
+    console.log('updateProcessButtonState:', { provider: currentSettings.provider, hasApiKey, selectedPagesCount: selectedPages.length });
     processButton.disabled = !hasApiKey || !hasSelectedPages;
+    
+    // Update button text based on availability
+    if (!hasApiKey && hasSelectedPages) {
+        processButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-1 13.5l103 78-110 190-119-50q-11 8-23 15t-24 12L590-80H370Z"/></svg><span>API 키 설정 필요</span>`;
+    } else if (hasApiKey && !hasSelectedPages) {
+        processButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M480-80q-84 0-158-30.5T195-195q-54-54-84.5-128T80-480q0-84 30.5-158T195-765q54-54 128-84.5T480-880q52 0 101 12.5T673-831l-47 47q-40-10-86-10-142 0-241 99t-99 241q0 142 99 241t241 99q116 0 211.5-73T774-480h-84l152-152 152 152h-84q-22 134-118 221t-226 87Z"/></svg><span>파일 선택 필요</span>`;
+    } else if (hasApiKey && hasSelectedPages) {
+        processButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M480-80q-84 0-158-30.5T195-195q-54-54-84.5-128T80-480q0-84 30.5-158T195-765q54-54 128-84.5T480-880q52 0 101 12.5T673-831l-47 47q-40-10-86-10-142 0-241 99t-99 241q0 142 99 241t241 99q116 0 211.5-73T774-480h-84l152-152 152 152h-84q-22 134-118 221t-226 87Z"/></svg><span>데이터 추출</span>`;
+    } else {
+        processButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-1 13.5l103 78-110 190-119-50q-11 8-23 15t-24 12L590-80H370Z"/></svg><span>API 키 및 파일 필요</span>`;
+    }
 }
 
 // Functions
@@ -1143,6 +1178,14 @@ function renderPdfPages() {
     
     pdfPagesContainer.innerHTML = '';
     
+    // Show or hide PDF preview container based on whether we have files
+    if (pdfFileGroups.size > 0) {
+        pdfPreviewContainer.classList.remove('hidden');
+    } else {
+        pdfPreviewContainer.classList.add('hidden');
+        return; // No files to render
+    }
+    
     // Group pages by filename and render
     for (const [fileName, pages] of pdfFileGroups.entries()) {
         // Create file group container
@@ -1177,6 +1220,7 @@ function renderPdfPages() {
             // Create page item container
             const pageItem = document.createElement('div');
             pageItem.className = 'pdf-page-item';
+            pageItem.setAttribute('data-page-id', pageData.data.substring(0, 20));
             
             // Create thumbnail
             const img = document.createElement('img');
@@ -1241,7 +1285,19 @@ function renderPdfPages() {
     }
 }
 
+
 function removePage(pageData: PageData) {
+    // Add to delete history for undo
+    deleteHistory.push({
+        pageData: { ...pageData }, // Deep copy
+        timestamp: Date.now()
+    });
+    
+    // Keep only recent delete actions
+    if (deleteHistory.length > MAX_UNDO_HISTORY) {
+        deleteHistory.shift();
+    }
+    
     // Remove from selected pages
     selectedPages = selectedPages.filter(p => p.data !== pageData.data);
     
@@ -1257,8 +1313,19 @@ function removePage(pageData: PageData) {
         }
     }
     
-    // Update UI
-    renderPdfPages();
+    // Update UI with fade out animation
+    const pageElement = document.querySelector(`[data-page-id="${pageData.data.substring(0, 20)}"]`) as HTMLElement;
+    if (pageElement) {
+        pageElement.style.transition = 'all 0.3s ease-out';
+        pageElement.style.opacity = '0';
+        pageElement.style.transform = 'scale(0.8) translateY(-20px)';
+        
+        setTimeout(() => {
+            renderPdfPages();
+        }, 300);
+    } else {
+        renderPdfPages();
+    }
     
     // Update preview if needed
     if (selectedPages.length === 0) {
@@ -1266,12 +1333,81 @@ function removePage(pageData: PageData) {
         dropZone.querySelector('p')?.classList.remove('hidden');
     }
     
-    // Hide PDF preview container if no files
-    if (pdfFileGroups.size === 0) {
-        pdfPreviewContainer.classList.add('hidden');
-    }
+    // renderPdfPages will handle showing/hiding the container
     
     updateProcessButtonState();
+    
+    // Show undo notification
+    showUndoNotification();
+}
+
+function undoLastDelete() {
+    console.log('undoLastDelete called, deleteHistory.length:', deleteHistory.length);
+    if (deleteHistory.length === 0) return;
+    
+    const lastDelete = deleteHistory.pop();
+    if (!lastDelete) return;
+    
+    console.log('Restoring deleted page:', lastDelete.pageData.fileName);
+    
+    const { pageData } = lastDelete;
+    const fileName = pageData.fileName;
+    
+    // Add back to file groups
+    if (pdfFileGroups.has(fileName)) {
+        const pages = pdfFileGroups.get(fileName)!;
+        pages.push(pageData);
+        // Sort pages by page number
+        pages.sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
+    } else {
+        pdfFileGroups.set(fileName, [pageData]);
+    }
+    
+    // Update UI
+    renderPdfPages();
+    
+    updateProcessButtonState();
+    
+    // Hide undo notification if no more items
+    if (deleteHistory.length === 0) {
+        hideUndoNotification();
+    }
+}
+
+function showUndoNotification() {
+    // Remove existing notification
+    const existing = document.querySelector('.undo-notification');
+    if (existing) existing.remove();
+    
+    const notification = document.createElement('div');
+    notification.className = 'undo-notification';
+    notification.innerHTML = `
+        <div class="undo-content">
+            <span>페이지가 삭제되었습니다</span>
+            <button id="undo-button">실행취소 (Ctrl+Z)</button>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Add click event
+    notification.querySelector('#undo-button')?.addEventListener('click', undoLastDelete);
+    
+    // Auto hide after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.classList.add('fade-out');
+            setTimeout(() => notification.remove(), 300);
+        }
+    }, 5000);
+}
+
+function hideUndoNotification() {
+    const notification = document.querySelector('.undo-notification');
+    if (notification) {
+        notification.classList.add('fade-out');
+        setTimeout(() => notification.remove(), 300);
+    }
 }
 
 function handleImageFile(file: File) {
@@ -1283,10 +1419,29 @@ function handleImageFile(file: File) {
             mimeType: file.type,
             fileName: file.name
         };
+        
+        // Add to file groups - if file already exists, replace it
+        if (pdfFileGroups.has(file.name)) {
+            // Remove any existing pages from selected pages
+            const existingPages = pdfFileGroups.get(file.name) || [];
+            existingPages.forEach(existingPage => {
+                selectedPages = selectedPages.filter(p => p.data !== existingPage.data);
+            });
+        }
+        pdfFileGroups.set(file.name, [pageData]);
+        
+        // Auto-select the uploaded page
         selectedPages.push(pageData);
+        
+        // Show preview
         imagePreview.src = result;
         imagePreview.classList.remove('hidden');
         dropZone.querySelector('p')?.classList.add('hidden');
+        
+        // Render PDF pages to show the image file too
+        renderPdfPages();
+        
+        // Update button state after page is selected
         updateProcessButtonState();
     };
     reader.readAsDataURL(file);
@@ -1302,7 +1457,6 @@ async function handlePdfFile(file: File) {
 
         try {
             const pdf = await pdfjsLib.getDocument(typedarray).promise;
-            pdfPreviewContainer.classList.remove('hidden');
             
             const pages: PageData[] = [];
 
@@ -1328,11 +1482,26 @@ async function handlePdfFile(file: File) {
                 pages.push(pageInfo);
             }
             
-            // Add pages to file groups
+            // Add pages to file groups - if file already exists, replace it
+            if (pdfFileGroups.has(file.name)) {
+                // Remove any existing pages from selected pages
+                const existingPages = pdfFileGroups.get(file.name) || [];
+                existingPages.forEach(existingPage => {
+                    selectedPages = selectedPages.filter(p => p.data !== existingPage.data);
+                });
+            }
             pdfFileGroups.set(file.name, pages);
+            
+            // Auto-select all uploaded pages
+            pages.forEach(page => {
+                selectedPages.push(page);
+            });
             
             // Render the updated PDF pages
             renderPdfPages();
+            
+            // Update button state after pages are selected
+            updateProcessButtonState();
         } catch (error) {
             console.error("Error processing PDF:", error);
             alert(`PDF 처리 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
@@ -1349,7 +1518,7 @@ function handleFilesSelect(files: FileList | File[]) {
     if (!files || files.length === 0) return;
 
     // Don't reset UI if we're adding more files
-    if (selectedPages.length === 0) {
+    if (selectedPages.length === 0 && pdfFileGroups.size === 0) {
         resetUploadUI();
     }
 
@@ -1397,8 +1566,29 @@ async function logToFile(content: string, filename: string) {
 }
 // --- 추가된 코드 끝 ---
 
+// Data validation and cleaning function
+function validateAndCleanExtractedData(data: any) {
+    console.log('Raw AI response data:', data);
+    
+    // Ensure all required fields exist with default values
+    const cleanedData = {
+        date: data.date || '',
+        quantity: parseFloat(data.quantity) || 0,
+        amountUSD: parseFloat(data.amountUSD) || 0,
+        commissionUSD: parseFloat(data.commissionUSD) || 0,
+        totalUSD: parseFloat(data.totalUSD) || 0,
+        totalKRW: parseFloat(data.totalKRW) || 0,
+        balanceKRW: parseFloat(data.balanceKRW) || 0
+    };
+    
+    console.log('Cleaned data:', cleanedData);
+    return cleanedData;
+}
+
 // AI Processing Functions
 async function processWithGemini(pageData: PageData) {
+    console.log('Starting Gemini processing with model:', currentSettings.model);
+    
     const textPart = {
         text: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요."
     };
@@ -1407,31 +1597,50 @@ async function processWithGemini(pageData: PageData) {
         inlineData: { mimeType: pageData.mimeType, data: pageData.data },
     };
 
-    const response = await fetch('http://localhost:3003/api/gemini', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            model: currentSettings.model,
-            contents: { parts: [textPart, imagePart] },
-            config: {
-                responseMimeType: "application/json",
-            }
-        })
-    });
+    try {
+        console.log('Sending request to Gemini proxy server...');
+        const response = await fetch('http://localhost:3003/api/gemini', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: currentSettings.model,
+                contents: { parts: [textPart, imagePart] },
+                config: {
+                    responseMimeType: "application/json",
+                }
+            })
+        });
 
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(`Gemini API 오류: ${response.status} - ${errorData.details || errorData.error}`);
-    }
+        console.log('Gemini proxy response status:', response.status, response.statusText);
 
-    const result = await response.json();
-    const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-    if (!jsonText) {
-        throw new Error('AI 응답이 비어있습니다.');
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+            console.error('Gemini proxy error:', errorData);
+            throw new Error(`Gemini API 오류 (${response.status}): ${errorData.error || response.statusText}`);
+        }
+
+        const result = await response.json();
+        console.log('Gemini raw response:', result);
+        
+        const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        console.log('Extracted JSON text:', jsonText);
+        
+        if (!jsonText) {
+            throw new Error('AI 응답이 비어있습니다.');
+        }
+        
+        const parsedData = JSON.parse(jsonText);
+        return validateAndCleanExtractedData(parsedData);
+        
+    } catch (error) {
+        console.error('Gemini processing error:', error);
+        if (error instanceof Error && error.message.includes('fetch')) {
+            throw new Error('프록시 서버에 연결할 수 없습니다. proxy-server.cjs가 실행되고 있는지 확인하세요.');
+        }
+        throw error;
     }
-    return JSON.parse(jsonText);
 }
 
 async function processWithOpenAI(pageData: PageData) {
@@ -1472,309 +1681,42 @@ async function processWithOpenAI(pageData: PageData) {
     const result = await response.json();
     const content = result.choices?.[0]?.message?.content;
     if (!content) throw new Error('No response from OpenAI');
-    return JSON.parse(content);
+    const parsedData = JSON.parse(content);
+    return validateAndCleanExtractedData(parsedData);
 }
 
 
 async function processWithUpstage(pageData: PageData) {
     // Use proxy server for security
-    const isDocVision = currentSettings.model === 'solar-docvision-preview';
-    
-    if (isDocVision) {
-        // --- 추가된 코드 시작 ---
-        const requestBody = {
+    const response = await fetch('http://localhost:3003/api/upstage', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
             model: currentSettings.model,
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요.\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}" },
-                        { type: "image_url", image_url: { url: `data:${pageData.mimeType};base64,${pageData.data}` } }
-                    ]
-                }
-            ],
-            stream: false
-        };
-        await logToFile(JSON.stringify(requestBody, null, 2), 'upstage-docvision-input.json');
-        // --- 추가된 코드 끝 ---
-        // Solar DocVision uses chat completions format
-        const response = await fetch(apiEndpoint, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody)
-        });
+            image: `data:${pageData.mimeType};base64,${pageData.data}`,
+            prompt: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요.\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}"
+        })
+    });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            // --- 추가된 코드 시작 ---
-            await logToFile(errorText, 'upstage-docvision-error.txt');
-            // --- 추가된 코드 끝 ---
-            throw new Error(`Upstage DocVision API 오류: ${response.status} ${response.statusText} - ${errorText}`);
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Upstage API 오류: ${response.status} - ${errorData.details || errorData.error}`);
+    }
+
+    const result = await response.json();
+    
+    // Parse the JSON response from Upstage
+    try {
+        if (result.data) {
+            return validateAndCleanExtractedData(result.data);
+        } else {
+            throw new Error('Upstage API에서 데이터를 받지 못했습니다.');
         }
-
-        const result = await response.json();
-        // --- 추가된 코드 시작 ---
-        await logToFile(JSON.stringify(result, null, 2), 'upstage-docvision-output.json');
-        // --- 추가된 코드 끝 ---
-        
-        // Chat API 응답에서 JSON 데이터 추출
-        try {
-            const content = result.choices?.[0]?.message?.content;
-            if (!content) {
-                throw new Error('Upstage DocVision API에서 응답을 받지 못했습니다.');
-            }
-            
-            const jsonMatch = content.match(/\{[\s\S]*?\}/);
-            if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]);
-            } else {
-                console.log('No JSON found in DocVision response:', content);
-                throw new Error('JSON 형식을 찾을 수 없습니다. 응답: ' + content.substring(0, 100));
-            }
-        } catch (parseError) {
-            console.error('Upstage DocVision 응답 파싱 오류:', parseError);
-            throw new Error('Upstage DocVision 응답을 파싱할 수 없습니다.');
-        }
-    } else {
-        // Document Parse API - try multipart/form-data format
-        const formData = new FormData();
-        
-        // Convert base64 to blob
-        const byteCharacters = atob(pageData.data);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: pageData.mimeType });
-        
-        formData.append('model', 'document-parse');  // Fixed model name
-        formData.append('document', blob, 'document.' + (pageData.mimeType.includes('png') ? 'png' : 'jpg'));
-        formData.append('ocr', 'auto');  // Required field
-        formData.append('output_formats', JSON.stringify(['text']));  // Proper array format
-        
-        // --- 추가된 코드 시작 ---
-        const formDataLog = `
---- FormData Fields ---
-model: document-parse
-document: [Blob, type=${blob.type}, size=${blob.size}]
-ocr: auto
-output_formats: ["text"]
---- Image Data (first 100 chars of base64) ---
-${pageData.data.substring(0, 100)}...
-`;
-        await logToFile(formDataLog, 'upstage-parse-input.txt');
-        // --- 추가된 코드 끝 ---
-        const response = await fetch(apiEndpoint, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                // Don't set Content-Type for FormData, let browser set it with boundary
-            },
-            body: formData
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            // --- 추가된 코드 시작 ---
-            await logToFile(errorText, 'upstage-parse-error.txt');
-            // --- 추가된 코드 끝 ---
-            throw new Error(`Upstage Document Parse API 오류: ${response.status} ${response.statusText} - ${errorText}`);
-        }
-
-        const result = await response.json();
-        // --- 추가된 코드 시작 ---
-        await logToFile(JSON.stringify(result, null, 2), 'upstage-parse-output.json');
-        // --- 추가된 코드 끝 ---
-        
-        // Document Parse API 응답에서 elements를 활용한 키워드 기반 데이터 추출
-        try {
-            console.log('Full Upstage Document Parse response:', result);
-            
-            const extractedData = {
-                date: '',
-                quantity: 0,
-                amountUSD: 0,
-                commissionUSD: 0,
-                totalUSD: 0,
-                totalKRW: 0,
-                balanceKRW: 0
-            };
-
-            // elements 배열에서 구조화된 정보 추출
-            if (result.elements && result.elements.length > 0) {
-                console.log('Processing elements:', result.elements.length);
-                
-                // 날짜 추출: "일 자" 또는 "작성일"이 포함된 element에서 찾기
-                const dateElement = result.elements.find((el: any) => 
-                    el.content?.text && (
-                        el.content.text.includes('일 자') || 
-                        el.content.text.includes('작성일') ||
-                        el.content.text.match(/\d{4}년\s*\d{1,2}월\s*\d{1,2}일/) ||
-                        el.content.text.match(/\d{4}\.\d{2}\.\d{2}/)
-                    )
-                );
-                
-                if (dateElement) {
-                    const dateText = dateElement.content.text;
-                    const datePatterns = [
-                        /(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)/,
-                        /(\d{4}\.\d{2}\.\d{2})/,
-                        /(\d{4}-\d{2}-\d{2})/
-                    ];
-                    
-                    for (const pattern of datePatterns) {
-                        const match = dateText.match(pattern);
-                        if (match) {
-                            let dateStr = match[1];
-                            if (dateStr.includes('년')) {
-                                dateStr = dateStr.replace(/년\s*/g, '-').replace(/월\s*/g, '-').replace(/일/g, '');
-                                // 월과 일이 한 자리수인 경우 앞에 0 추가
-                                const parts = dateStr.split('-');
-                                if (parts.length === 3) {
-                                    dateStr = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-                                }
-                            } else {
-                                dateStr = dateStr.replace(/\./g, '-');
-                            }
-                            extractedData.date = dateStr;
-                            console.log('Found date:', dateStr);
-                            break;
-                        }
-                    }
-                }
-
-                // 수량 추출: "GT" 키워드가 있는 element에서 찾기
-                const quantityElement = result.elements.find((el: any) => 
-                    el.content?.text && el.content.text.includes('GT')
-                );
-                
-                if (quantityElement) {
-                    const quantityMatch = quantityElement.content.text.match(/수\s*량\s*([\d,]+)\s*GT/i) ||
-                                        quantityElement.content.text.match(/([\d,]+)\s*GT/i);
-                    if (quantityMatch) {
-                        extractedData.quantity = parseFloat(quantityMatch[1].replace(/,/g, ''));
-                        console.log('Found quantity:', extractedData.quantity);
-                    }
-                }
-
-                // 금액 관련 데이터가 있는 table element 찾기 (제품비용 섹션)
-                const amountElement = result.elements.find((el: any) => 
-                    el.content?.text && el.category === 'table' && (
-                        el.content.text.includes('COMMERCIAL INVOICE') ||
-                        el.content.text.includes('COMMISSION') ||
-                        el.content.text.includes('제품비용')
-                    )
-                );
-
-                if (amountElement) {
-                    const amountText = amountElement.content.text;
-                    console.log('Processing amount text:', amountText);
-                    
-                    // 통화 기호 패턴 (OCR로 인한 변형 고려: ₩, \, 원 등)
-                    const currencyPattern = '[₩\\\\원]?';
-                    
-                    // COMMERCIAL INVOICE CHARGE 금액 추출
-                    // 실제 형식: "COMMERCIAL INVOICE CARGE ₩32,744,630 ₩3,274,463 US$22,234.42"
-                    const invoiceMatch = amountText.match(
-                        new RegExp(`COMMERCIAL\\s+INVOICE\\s+CAR?GE?\\s+${currencyPattern}([\\d,]+)\\s+${currencyPattern}[\\d,]+\\s+US\\$([\\d,]+(?:\\.\\d+)?)`, 'i')
-                    );
-                    if (invoiceMatch) {
-                        extractedData.amountUSD = parseFloat(invoiceMatch[2].replace(/,/g, ''));
-                        console.log('Found amountUSD:', extractedData.amountUSD);
-                    }
-                    
-                    // COMMISSION 금액 추출
-                    // 실제 형식: "COMMISSION ₩327,440 ₩32,744 US$222.34"
-                    const commissionMatch = amountText.match(
-                        new RegExp(`COMMISSION\\s+${currencyPattern}([\\d,]+)\\s+${currencyPattern}[\\d,]+\\s+US\\$([\\d,]+(?:\\.\\d+)?)`, 'i')
-                    );
-                    if (commissionMatch) {
-                        extractedData.commissionUSD = parseFloat(commissionMatch[2].replace(/,/g, ''));
-                        console.log('Found commissionUSD:', extractedData.commissionUSD);
-                    }
-                    
-                    // TOTAL 2번 (제품비용 합계) 추출
-                    // 실제 형식: "TOTAL 2번 ₩33,072,070 ₩3,307,207 US$22,456.76"
-                    const total2Match = amountText.match(
-                        new RegExp(`TOTAL\\s+2번\\s+${currencyPattern}([\\d,]+)\\s+${currencyPattern}[\\d,]+\\s+US\\$([\\d,]+(?:\\.\\d+)?)`, 'i')
-                    );
-                    if (total2Match) {
-                        extractedData.totalUSD = parseFloat(total2Match[2].replace(/,/g, ''));
-                        extractedData.totalKRW = parseFloat(total2Match[1].replace(/,/g, ''));
-                        console.log('Found totalUSD:', extractedData.totalUSD);
-                        console.log('Found totalKRW:', extractedData.totalKRW);
-                    }
-                }
-
-                // 잔액이 있는 element 찾기 (하단 정산 섹션)
-                const balanceElement = result.elements.find((el: any) => 
-                    el.content?.text && (
-                        el.content.text.includes('잔 액') ||
-                        el.content.text.includes('잔액')
-                    )
-                );
-
-                if (balanceElement) {
-                    const balanceText = balanceElement.content.text;
-                    console.log('Processing balance text:', balanceText);
-                    
-                    // OCR로 인한 통화 기호 변형 고려 (₩, \, 원, 없음 등)
-                    // 실제 형식: "잔 액 \4,796,651" (₩가 \로 잘못 인식됨)
-                    const balanceMatch = balanceText.match(/잔\s*액\s*[₩\\원]?([\d,]+)/i);
-                    if (balanceMatch) {
-                        extractedData.balanceKRW = parseFloat(balanceMatch[1].replace(/,/g, ''));
-                        console.log('Found balanceKRW:', extractedData.balanceKRW);
-                    }
-                }
-                
-            } else {
-                // Fallback: content.text가 있는 경우 기존 방식 사용
-                let extractedText = '';
-                
-                if (result.content && result.content.text) {
-                    extractedText = result.content.text;
-                } else if (result.content && result.content.markdown) {
-                    extractedText = result.content.markdown;
-                } else {
-                    throw new Error('예상하지 못한 응답 구조입니다.');
-                }
-                
-                if (!extractedText) {
-                    throw new Error('추출된 텍스트가 비어있습니다.');
-                }
-                
-                console.log('Using fallback text extraction method');
-                
-                // 기존 fallback 로직 (간소화된 버전)
-                const dateMatch = extractedText.match(/(\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{4}\.\d{2}\.\d{2})/);
-                if (dateMatch) {
-                    let dateStr = dateMatch[1];
-                    if (dateStr.includes('년')) {
-                        dateStr = dateStr.replace(/년\s*/g, '-').replace(/월\s*/g, '-').replace(/일/g, '');
-                    } else {
-                        dateStr = dateStr.replace(/\./g, '-');
-                    }
-                    extractedData.date = dateStr;
-                }
-                
-                const quantityMatch = extractedText.match(/([\d,]+)\s*GT/i);
-                if (quantityMatch) {
-                    extractedData.quantity = parseFloat(quantityMatch[1].replace(/,/g, ''));
-                }
-            }
-            
-            console.log('Final extracted structured data:', extractedData);
-            return extractedData;
-            
-        } catch (parseError) {
-            console.error('Upstage Document Parse 응답 파싱 오류:', parseError);
-            console.error('Original response:', result);
-            throw new Error(`Upstage Document Parse 응답을 파싱할 수 없습니다: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-        }
+    } catch (parseError) {
+        console.error('Upstage 응답 파싱 오류:', parseError);
+        throw new Error('Upstage 응답을 파싱할 수 없습니다.');
     }
 }
 
@@ -1815,7 +1757,8 @@ async function processWithOllama(pageData: PageData) {
         // Extract JSON from response
         const jsonMatch = content.match(/\{[\s\S]*?\}/);
         if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]);
+            const parsedData = JSON.parse(jsonMatch[0]);
+            return validateAndCleanExtractedData(parsedData);
         } else {
             throw new Error('JSON 형식을 찾을 수 없습니다.');
         }
@@ -1827,6 +1770,10 @@ async function processWithOllama(pageData: PageData) {
 
 
 async function processDocument() {
+    console.log('=== 데이터 추출 시작 ===');
+    console.log('선택된 페이지 수:', selectedPages.length);
+    console.log('현재 설정:', currentSettings);
+    
     if (selectedPages.length === 0) {
         alert('먼저 이미지나 PDF 페이지를 선택하세요.');
         return;
@@ -1845,6 +1792,8 @@ async function processDocument() {
     let successCount = 0;
     const allExtractedData = [];
     
+    try {
+    
     // Start logging
     const startTime = Date.now();
     const logId = startLogging(currentSettings.provider, currentSettings.model, totalToProcess);
@@ -1855,6 +1804,7 @@ async function processDocument() {
 
         try {
             let extractedData;
+            console.log(`Processing page ${i + 1} with provider: ${currentSettings.provider}`);
             
             switch (currentSettings.provider) {
                 case 'gemini':
@@ -1872,6 +1822,8 @@ async function processDocument() {
                 default:
                     throw new Error('지원되지 않는 AI 제공자입니다.');
             }
+            
+            console.log(`Successfully processed page ${i + 1}:`, extractedData);
 
             allExtractedData.push(extractedData);
             successCount++;
@@ -1882,16 +1834,37 @@ async function processDocument() {
         }
     }
     
-    allExtractedData.forEach(extractedData => {
-        const formattedData = {
-             date: extractedData.date,
-             quantity: extractedData.quantity.toLocaleString(),
-             amountUSD: extractedData.amountUSD.toLocaleString('en-US'),
-             commissionUSD: extractedData.commissionUSD.toLocaleString('en-US'),
-             totalUSD: extractedData.totalUSD.toLocaleString('en-US'),
-             totalKRW: extractedData.totalKRW.toLocaleString('ko-KR'),
-             balanceKRW: extractedData.balanceKRW.toLocaleString('ko-KR'),
+    allExtractedData.forEach((extractedData, index) => {
+        console.log(`Formatting data for row ${index + 1}:`, extractedData);
+        
+        // Safe number formatting function
+        const safeToLocaleString = (value: any, locale: string = 'ko-KR'): string => {
+            if (value === null || value === undefined || value === '') {
+                return '0';
+            }
+            
+            // Convert to number if it's a string
+            const numValue = typeof value === 'string' ? parseFloat(value.replace(/,/g, '')) : value;
+            
+            if (isNaN(numValue)) {
+                console.warn(`Invalid number value: ${value}`);
+                return '0';
+            }
+            
+            return numValue.toLocaleString(locale);
         };
+        
+        const formattedData = {
+             date: extractedData.date || '',
+             quantity: safeToLocaleString(extractedData.quantity),
+             amountUSD: safeToLocaleString(extractedData.amountUSD, 'en-US'),
+             commissionUSD: safeToLocaleString(extractedData.commissionUSD, 'en-US'),
+             totalUSD: safeToLocaleString(extractedData.totalUSD, 'en-US'),
+             totalKRW: safeToLocaleString(extractedData.totalKRW, 'ko-KR'),
+             balanceKRW: safeToLocaleString(extractedData.balanceKRW, 'ko-KR'),
+        };
+        
+        console.log(`Formatted data for row ${index + 1}:`, formattedData);
         addRow(formattedData);
     });
 
@@ -1903,16 +1876,20 @@ async function processDocument() {
     let totalOutputTokens = 0;
     
     allExtractedData.forEach(data => {
-        // Estimate input tokens (prompt + image)
-        const promptText = "제공된 수입 정산서 문서에서 데이터를 추출해 주세요...";
-        const inputTokens = estimateTokens(promptText, true); // true for image
-        
-        // Estimate output tokens (JSON response)
-        const outputText = JSON.stringify(data);
-        const outputTokens = estimateTokens(outputText);
-        
-        totalInputTokens += inputTokens;
-        totalOutputTokens += outputTokens;
+        try {
+            // Estimate input tokens (prompt + image)
+            const promptText = "제공된 수입 정산서 문서에서 데이터를 추출해 주세요...";
+            const inputTokens = estimateTokens(promptText, true); // true for image
+            
+            // Estimate output tokens (JSON response) - safely handle invalid data
+            const outputText = data ? JSON.stringify(data) : '{}';
+            const outputTokens = estimateTokens(outputText);
+            
+            totalInputTokens += inputTokens || 0;
+            totalOutputTokens += outputTokens || 0;
+        } catch (error) {
+            console.warn('Error estimating tokens for data:', data, error);
+        }
     });
     
     endLogging(logId, processingTime, totalInputTokens, totalOutputTokens);
@@ -1922,12 +1899,19 @@ async function processDocument() {
         showRatingSection();
     }
 
-    loadingOverlay.classList.add('hidden');
-    updateProcessButtonState();
-    loadingOverlay.querySelector('p')!.textContent = 'AI가 문서를 분석 중입니다...';
-
     if (successCount < totalToProcess) {
         alert(`${successCount} / ${totalToProcess} 개의 페이지만 성공적으로 처리되었습니다.`);
+    }
+    
+    } catch (globalError) {
+        console.error('Critical error in processDocument:', globalError);
+        alert(`처리 중 심각한 오류가 발생했습니다: ${globalError instanceof Error ? globalError.message : String(globalError)}`);
+    } finally {
+        // Always restore UI state
+        loadingOverlay.classList.add('hidden');
+        processButton.disabled = false;
+        updateProcessButtonState();
+        loadingOverlay.querySelector('p')!.textContent = 'AI가 문서를 분석 중입니다...';
     }
 }
 
@@ -2080,12 +2064,23 @@ function setupEventListeners() {
         });
     });
     
-    // ESC key to close modal
+    // Global keyboard shortcuts - use capture phase to ensure it's not blocked
     document.addEventListener('keydown', (e) => {
+        // ESC key to close modal
         if (e.key === 'Escape' && !apiSettingsModal.classList.contains('hidden')) {
             hideAPISettingsModal();
         }
-    });
+        
+        // Ctrl+Z for undo (Windows/Linux) or Cmd+Z (Mac)
+        if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.code === 'KeyZ')) {
+            console.log('Undo key combination detected, deleteHistory.length:', deleteHistory.length);
+            if (deleteHistory.length > 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                undoLastDelete();
+            }
+        }
+    }, true); // Use capture phase
     
     // Tab switching functionality
     tabButtons = document.querySelectorAll('.tab-button') as NodeListOf<HTMLButtonElement>;
