@@ -14,10 +14,10 @@ A powerful AI-driven document processing system that extracts structured data fr
 - Notification system for new releases
 - One-click update navigation
 
-### 🔒 Secure API Key Management
-- Encrypted local storage of API keys
-- User-friendly settings modal
-- Support for multiple AI providers
+### 🔒 Enhanced API Key Security
+- **AES-GCM 암호화**: Web Crypto API를 사용한 강력한 암호화
+- **로컬 파일 저장**: 브라우저를 닫아도 키가 안전하게 보존
+- **자동 로딩**: 앱 시작 시 암호화된 키 자동 복구
 
 ### 🤖 Multi-AI Support
 - **Google Gemini** (2.5 Flash, Pro models)
@@ -57,9 +57,10 @@ chmod +x start-app.sh
 Configure API keys using one of these methods:
 
 1. **Through App Interface** (Recommended):
-   - Click the "API Settings" button in the app
+   - Click the "API 설정" button in the app
    - Enter your API keys securely
-   - Keys are encrypted and stored locally
+   - Keys are **AES-GCM encrypted** and stored locally
+   - **Persistent storage**: Keys remain after browser restart
 
 2. **Using .env file**:
    ```bash
@@ -130,12 +131,18 @@ npm run build
 - **Images**: JPG, PNG, GIF, WebP
 - **Documents**: PDF (multi-page with individual page selection)
 
-## 🔒 Security Notes
+## 🔒 Security Features
 
-- API keys are encrypted using client-side cryptography
-- No sensitive data is transmitted to external servers except AI APIs
-- Files are processed entirely in the browser
-- Never commit `.env` files with actual API keys
+### 강화된 API 키 보안
+- **AES-GCM 256-bit 암호화**: Web Crypto API 사용
+- **로컬 저장소**: localStorage에 암호화되어 저장
+- **자동 복구**: 브라우저 재시작 시 자동 로드
+- **키 우선순위**: UI 입력 키 → 환경변수 키
+
+### 일반 보안
+- 파일은 브라우저에서만 처리 (서버 전송 없음)
+- AI API 외 외부 서버로 민감 데이터 전송 없음
+- .env 파일을 커밋하지 마세요
 
 ## 🔄 Update System
 

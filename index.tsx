@@ -80,6 +80,12 @@ interface CacheEntry {
 const AI_CACHE_KEY = 'ai_response_cache';
 const CACHE_EXPIRY_DAYS = 7; // 7일 후 만료
 
+// Local encrypted file storage configuration
+const LOCAL_STORAGE_CONFIG = {
+    fileName: '.api_keys_encrypted.json',
+    keyFile: '.encryption_key'
+};
+
 // Pricing information (USD per 1M tokens) - Updated for 2025
 const MODEL_PRICING = {
     // Gemini pricing
@@ -919,22 +925,44 @@ interface SecureAPIKeys {
     upstage?: string;
 }
 
+// Cache for decrypted keys to avoid repeated decryption
+let cachedDecryptedKeys: SecureAPIKeys | null = null;
+
 function saveSecureAPIKeys(keys: SecureAPIKeys) {
-    const encryptionKey = getOrCreateEncryptionKey();
-    const encryptedKeys: any = {};
-    
-    Object.entries(keys).forEach(([provider, key]) => {
-        if (key && key.trim()) {
-            encryptedKeys[provider] = simpleEncrypt(key.trim(), encryptionKey);
-        }
+    // Use the new async encryption system
+    saveAPIKeysToFile(keys).catch(error => {
+        console.error('Failed to save encrypted API keys:', error);
+        // Fallback to simple encryption for backward compatibility
+        const encryptionKey = getOrCreateEncryptionKey();
+        const encryptedKeys: any = {};
+        
+        Object.entries(keys).forEach(([provider, key]) => {
+            if (key && key.trim()) {
+                encryptedKeys[provider] = simpleEncrypt(key.trim(), encryptionKey);
+            }
+        });
+        
+        localStorage.setItem('secureAPIKeys', JSON.stringify(encryptedKeys));
     });
-    
-    localStorage.setItem('secureAPIKeys', JSON.stringify(encryptedKeys));
 }
 
 function loadSecureAPIKeys(): SecureAPIKeys {
+    // First try the new encrypted format
+    const newFormat = localStorage.getItem('encrypted_api_keys');
+    if (newFormat && cachedDecryptedKeys) {
+        return cachedDecryptedKeys;
+    }
+    
+    // Load asynchronously in background
+    if (newFormat) {
+        loadAPIKeysFromFile().then(keys => {
+            cachedDecryptedKeys = keys;
+        });
+    }
+    
+    // Fallback to old format for immediate access
     const stored = localStorage.getItem('secureAPIKeys');
-    if (!stored) return {};
+    if (!stored) return cachedDecryptedKeys || {};
     
     try {
         const encryptedKeys = JSON.parse(stored);
@@ -953,31 +981,160 @@ function loadSecureAPIKeys(): SecureAPIKeys {
         return decryptedKeys;
     } catch (error) {
         console.error('Failed to load API keys:', error);
-        return {};
+        return cachedDecryptedKeys || {};
     }
 }
 
 function getAPIKey(provider: string): string {
-    // First try to get from environment variables (for development)
-    const envKey = (import.meta as any).env?.[`VITE_${provider.toUpperCase()}_API_KEY`];
-    if (envKey) return envKey;
-    
-    // Then try to get from secure storage
+    // 1순위: UI에서 직접 입력한 API 키 (암호화되어 로컬 파일에 저장)
     const keys = loadSecureAPIKeys();
-    const key = keys[provider as keyof SecureAPIKeys];
-    return key || '';
+    const uiKey = keys[provider as keyof SecureAPIKeys];
+    if (uiKey) {
+        console.log(`[API Key] Using encrypted local key for ${provider}`);
+        return uiKey;
+    }
+    
+    // 2순위: 환경변수 (.env 파일, 개발용)
+    const envKey = (import.meta as any).env?.[`VITE_${provider.toUpperCase()}_API_KEY`];
+    if (envKey) {
+        console.log(`[API Key] Using environment key for ${provider}`);
+        return envKey;
+    }
+    
+    console.log(`[API Key] No key found for ${provider}`);
+    return '';
 }
 
-// Modal Management Functions
+// Local encrypted file storage functions
+async function generateEncryptionKey(): Promise<CryptoKey> {
+    return await crypto.subtle.generateKey(
+        {
+            name: 'AES-GCM',
+            length: 256
+        },
+        true,
+        ['encrypt', 'decrypt']
+    );
+}
+
+async function saveEncryptionKey(key: CryptoKey): Promise<void> {
+    try {
+        const exportedKey = await crypto.subtle.exportKey('jwk', key);
+        localStorage.setItem('api_key_encryption_key', JSON.stringify(exportedKey));
+    } catch (error) {
+        console.error('Failed to save encryption key:', error);
+    }
+}
+
+async function loadEncryptionKey(): Promise<CryptoKey | null> {
+    try {
+        const keyData = localStorage.getItem('api_key_encryption_key');
+        if (!keyData) return null;
+        
+        const jwk = JSON.parse(keyData);
+        return await crypto.subtle.importKey(
+            'jwk',
+            jwk,
+            { name: 'AES-GCM', length: 256 },
+            true,
+            ['encrypt', 'decrypt']
+        );
+    } catch (error) {
+        console.error('Failed to load encryption key:', error);
+        return null;
+    }
+}
+
+async function encryptData(data: string, key: CryptoKey): Promise<{ encrypted: string; iv: string }> {
+    const encoder = new TextEncoder();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    
+    const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: iv },
+        key,
+        encoder.encode(data)
+    );
+    
+    return {
+        encrypted: Array.from(new Uint8Array(encrypted)).map(b => b.toString(16).padStart(2, '0')).join(''),
+        iv: Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('')
+    };
+}
+
+async function decryptData(encryptedHex: string, ivHex: string, key: CryptoKey): Promise<string> {
+    const encrypted = new Uint8Array(encryptedHex.match(/.{2}/g)!.map(byte => parseInt(byte, 16)));
+    const iv = new Uint8Array(ivHex.match(/.{2}/g)!.map(byte => parseInt(byte, 16)));
+    
+    const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: iv },
+        key,
+        encrypted
+    );
+    
+    return new TextDecoder().decode(decrypted);
+}
+
+async function saveAPIKeysToFile(keys: SecureAPIKeys): Promise<void> {
+    try {
+        let encryptionKey = await loadEncryptionKey();
+        if (!encryptionKey) {
+            encryptionKey = await generateEncryptionKey();
+            await saveEncryptionKey(encryptionKey);
+        }
+        
+        const dataToEncrypt = JSON.stringify(keys);
+        const { encrypted, iv } = await encryptData(dataToEncrypt, encryptionKey);
+        
+        const encryptedData = { encrypted, iv, timestamp: Date.now() };
+        localStorage.setItem('encrypted_api_keys', JSON.stringify(encryptedData));
+        
+        console.log('API keys encrypted and saved successfully');
+    } catch (error) {
+        console.error('Failed to save encrypted API keys:', error);
+    }
+}
+
+async function loadAPIKeysFromFile(): Promise<SecureAPIKeys> {
+    try {
+        const encryptedDataStr = localStorage.getItem('encrypted_api_keys');
+        if (!encryptedDataStr) return {};
+        
+        const encryptedData = JSON.parse(encryptedDataStr);
+        const encryptionKey = await loadEncryptionKey();
+        if (!encryptionKey) return {};
+        
+        const decryptedData = await decryptData(encryptedData.encrypted, encryptedData.iv, encryptionKey);
+        const keys = JSON.parse(decryptedData);
+        
+        console.log('API keys loaded and decrypted successfully');
+        return keys;
+    } catch (error) {
+        console.error('Failed to load encrypted API keys:', error);
+        return {};
+    }
+}
+
+// Modal Management Functions  
 function showAPISettingsModal() {
     if (!apiSettingsModal) return;
     
-    // Load existing keys
+    // Load existing keys from UI storage
     const keys = loadSecureAPIKeys();
-    if (geminiKeyInput) geminiKeyInput.value = keys.gemini || '';
-    if (openaiKeyInput) openaiKeyInput.value = keys.openai || '';
-    if (claudeKeyInput) claudeKeyInput.value = keys.claude || '';
-    if (upstageKeyInput) upstageKeyInput.value = keys.upstage || '';
+    
+    // Helper function: If no UI key exists, pre-fill with .env values
+    const getDisplayKey = (provider: string) => {
+        const uiKey = keys[provider as keyof SecureAPIKeys];
+        if (uiKey) return uiKey;
+        
+        // Pre-fill from .env if available
+        const envKey = (import.meta as any).env?.[`VITE_${provider.toUpperCase()}_API_KEY`];
+        return envKey || '';
+    };
+    
+    if (geminiKeyInput) geminiKeyInput.value = getDisplayKey('gemini');
+    if (openaiKeyInput) openaiKeyInput.value = getDisplayKey('openai');
+    if (claudeKeyInput) claudeKeyInput.value = getDisplayKey('claude');
+    if (upstageKeyInput) upstageKeyInput.value = getDisplayKey('upstage');
     
     apiSettingsModal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
@@ -1017,6 +1174,37 @@ function saveAPIKeysFromModal() {
     alert('API 키가 안전하게 저장되었습니다.');
 }
 
+// Initialize API keys from .env on first run
+function initializeAPIKeysFromEnv() {
+    const existingKeys = loadSecureAPIKeys();
+    
+    // Check if we already have some UI keys stored
+    const hasUIKeys = Object.keys(existingKeys).length > 0;
+    if (hasUIKeys) return; // Don't overwrite existing UI settings
+    
+    // Import .env keys to UI storage for first-time users
+    const envKeys: SecureAPIKeys = {};
+    const providers = ['gemini', 'openai', 'claude', 'upstage'];
+    
+    providers.forEach(provider => {
+        const envKey = (import.meta as any).env?.[`VITE_${provider.toUpperCase()}_API_KEY`];
+        if (envKey && envKey.trim()) {
+            envKeys[provider as keyof SecureAPIKeys] = envKey.trim();
+        }
+    });
+    
+    // Save to UI storage if we found any .env keys
+    if (Object.keys(envKeys).length > 0) {
+        console.log('Initializing API keys from .env file:', Object.keys(envKeys));
+        saveSecureAPIKeys(envKeys);
+        
+        // Show user-friendly notification
+        setTimeout(() => {
+            alert(`API 키가 자동으로 설정되었습니다!\n\n설정된 제공자: ${Object.keys(envKeys).join(', ')}\n\n"API 설정" 버튼에서 키를 변경할 수 있습니다.`);
+        }, 2000); // 2초 후 표시 (UI 로딩 완료 후)
+    }
+}
+
 function togglePasswordVisibility(targetId: string) {
     const input = document.getElementById(targetId) as HTMLInputElement;
     if (!input) return;
@@ -1029,6 +1217,9 @@ function togglePasswordVisibility(targetId: string) {
 
 // Initialize UI after DOM elements are available
 function initializeUI() {
+    // Initialize API keys from .env on first run
+    initializeAPIKeysFromEnv();
+    
     updateProviderPillsStatus();
     updateProcessButtonState();
 }
@@ -2054,6 +2245,7 @@ function setupEventListeners() {
     saveApiKeysButton.addEventListener('click', saveAPIKeysFromModal);
     cancelApiSettingsButton.addEventListener('click', hideAPISettingsModal);
     
+    
     // Password visibility toggles
     document.querySelectorAll('.toggle-visibility').forEach(button => {
         button.addEventListener('click', () => {
@@ -2110,9 +2302,20 @@ function setupEventListeners() {
 }
 
 // Initial setup
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Load usage logs
     usageLogs = loadUsageLogs();
+    
+    // Initialize encrypted API keys
+    try {
+        cachedDecryptedKeys = await loadAPIKeysFromFile();
+        console.log('Encrypted API keys loaded successfully');
+    } catch (error) {
+        console.log('Loading encrypted API keys in background...');
+        loadAPIKeysFromFile().then(keys => {
+            cachedDecryptedKeys = keys;
+        });
+    }
     
     initializeSettings();
     setupEventListeners();
