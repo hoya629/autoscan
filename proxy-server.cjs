@@ -4,7 +4,7 @@ const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
-const PORT = 3003;
+const PORT = 3002;
 
 // CORS 설정
 app.use(cors({
@@ -18,7 +18,9 @@ app.use(express.json({ limit: '50mb' }));
 // Claude API 프록시
 app.post('/api/claude', async (req, res) => {
     try {
-        const apiKey = process.env.VITE_CLAUDE_API_KEY;
+        // 1순위: 요청에서 전달된 API 키
+        const apiKey = req.body.apiKey || req.headers['x-api-key'] || process.env.VITE_CLAUDE_API_KEY;
+        console.log('Claude API Key source:', req.body.apiKey ? 'request body' : req.headers['x-api-key'] ? 'header' : 'env');
         console.log('Claude API Key length:', apiKey?.length || 0);
         console.log('Claude API Key prefix:', apiKey?.substring(0, 10) || 'none');
         
@@ -60,7 +62,9 @@ app.post('/api/claude', async (req, res) => {
 // OpenAI API 프록시
 app.post('/api/openai', async (req, res) => {
     try {
-        const apiKey = process.env.OPENAI_API_KEY;
+        // 1순위: 요청에서 전달된 API 키
+        const apiKey = req.body.apiKey || req.headers['x-api-key'] || process.env.OPENAI_API_KEY;
+        console.log('OpenAI API Key source:', req.body.apiKey ? 'request body' : req.headers['x-api-key'] ? 'header' : 'env');
         console.log('OpenAI API Key length:', apiKey?.length || 0);
         console.log('OpenAI API Key prefix:', apiKey?.substring(0, 10) || 'none');
         
@@ -68,7 +72,10 @@ app.post('/api/openai', async (req, res) => {
             return res.status(400).json({ error: 'OpenAI API key not configured' });
         }
 
-        const response = await axios.post('https://api.openai.com/v1/chat/completions', req.body, {
+        // API 키를 요청 본문에서 제거하고 나머지 데이터만 전달
+        const { apiKey: _, ...requestBody } = req.body;
+        
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', requestBody, {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`
@@ -88,7 +95,9 @@ app.post('/api/openai', async (req, res) => {
 // Gemini API 프록시
 app.post('/api/gemini', async (req, res) => {
     try {
-        const apiKey = process.env.GEMINI_API_KEY;
+        // 1순위: 요청에서 전달된 API 키
+        const apiKey = req.body.apiKey || req.headers['x-api-key'] || process.env.GEMINI_API_KEY;
+        console.log('Gemini API Key source:', req.body.apiKey ? 'request body' : req.headers['x-api-key'] ? 'header' : 'env');
         console.log('Gemini API Key length:', apiKey?.length || 0);
         console.log('Gemini API Key prefix:', apiKey?.substring(0, 10) || 'none');
         
@@ -100,9 +109,12 @@ app.post('/api/gemini', async (req, res) => {
         const modelName = req.body.model || 'gemini-2.5-flash';
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
         
+        // API 키를 요청 본문에서 제거하고 나머지 데이터만 전달
+        const { apiKey: _, ...requestBody } = req.body;
+        
         const response = await axios.post(apiUrl, {
-            contents: req.body.contents,
-            generationConfig: req.body.config || {}
+            contents: requestBody.contents,
+            generationConfig: requestBody.config || {}
         }, {
             headers: {
                 'Content-Type': 'application/json'
@@ -122,7 +134,9 @@ app.post('/api/gemini', async (req, res) => {
 // Upstage API 프록시
 app.post('/api/upstage', async (req, res) => {
     try {
-        const apiKey = process.env.UPSTAGE_API_KEY;
+        // 1순위: 요청에서 전달된 API 키
+        const apiKey = req.body.apiKey || req.headers['x-api-key'] || process.env.UPSTAGE_API_KEY;
+        console.log('Upstage API Key source:', req.body.apiKey ? 'request body' : req.headers['x-api-key'] ? 'header' : 'env');
         console.log('Upstage API Key length:', apiKey?.length || 0);
         console.log('Upstage API Key prefix:', apiKey?.substring(0, 10) || 'none');
         
@@ -130,8 +144,11 @@ app.post('/api/upstage', async (req, res) => {
             return res.status(400).json({ error: 'Upstage API key not configured' });
         }
 
+        // API 키를 요청 본문에서 제거하고 나머지 데이터만 전달
+        const { apiKey: _, ...requestBody } = req.body;
+        
         // Determine API endpoint based on model
-        const isDocVision = req.body.model === 'solar-docvision-preview';
+        const isDocVision = requestBody.model === 'solar-docvision-preview';
         const apiEndpoint = isDocVision 
             ? 'https://api.upstage.ai/v1/solar/chat/completions'
             : 'https://api.upstage.ai/v1/document-digitization';
@@ -139,7 +156,7 @@ app.post('/api/upstage', async (req, res) => {
         let response;
         if (isDocVision) {
             // Solar DocVision uses chat completions format
-            response = await axios.post(apiEndpoint, req.body, {
+            response = await axios.post(apiEndpoint, requestBody, {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json'
@@ -147,7 +164,7 @@ app.post('/api/upstage', async (req, res) => {
             });
         } else {
             // Document Parse API uses form data
-            response = await axios.post(apiEndpoint, req.body, {
+            response = await axios.post(apiEndpoint, requestBody, {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': req.headers['content-type'] || 'application/json'

@@ -609,11 +609,11 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
             return false;
         }
         
-        // For proxy server providers, check if proxy server is running (optional)
+        // For proxy server providers, check if proxy server is running (required for security)
         if (['gemini', 'openai', 'upstage'].includes(provider)) {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 1000);
+                const timeoutId = setTimeout(() => controller.abort(), 2000);
                 
                 const response = await fetch('http://localhost:3002/health', {
                     method: 'GET',
@@ -621,18 +621,19 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
                 });
                 
                 clearTimeout(timeoutId);
-                console.log(`[Provider Check] Proxy server health for ${provider}: ${response.status}`);
+                console.log(`✅ [Provider Check] Proxy server available for ${provider}: ${response.status}`);
                 
-                // If proxy server is available, great!
-                if (response.ok) return true;
+                if (response.ok) {
+                    console.log(`✅ [Provider Check] ${provider} ready to use with proxy server`);
+                    return true;
+                }
                 
-                // If proxy server is not available but we have API key, still allow usage
-                console.log(`[Provider Check] Proxy server not available for ${provider}, but API key exists - allowing direct usage`);
-                return true;
+                console.log(`❌ [Provider Check] Proxy server responded with error for ${provider}: ${response.status}`);
+                return false;
             } catch (error) {
-                console.log(`[Provider Check] Proxy server not available for ${provider}, but API key exists - allowing direct usage`);
-                // Even if proxy server is not available, allow usage if API key exists
-                return true;
+                console.error(`❌ [Provider Check] Proxy server connection failed for ${provider}:`, error.message);
+                console.error(`❌ [Provider Check] Please start the proxy server with: npm run proxy`);
+                return false;
             }
         }
         
@@ -1980,17 +1981,20 @@ async function processWithGemini(pageData: PageData) {
         }
         console.log('✅ [Gemini] API key found, length:', apiKey.length);
 
-        console.log('🚀 [Gemini] Sending request directly to Gemini API...');
-        console.log('🚀 [Gemini] Request URL:', `https://generativelanguage.googleapis.com/v1beta/models/${currentSettings.model}:generateContent`);
+        console.log('🚀 [Gemini] Sending request through proxy server...');
+        console.log('🚀 [Gemini] Proxy URL: http://localhost:3002/api/gemini');
         console.log('🚀 [Gemini] Image data length:', pageData.data.length, 'MIME type:', pageData.mimeType);
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentSettings.model}:generateContent?key=${apiKey}`, {
+        
+        const response = await fetch('http://localhost:3002/api/gemini', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
+                apiKey: apiKey, // UI에서 입력한 API 키 전달
+                model: currentSettings.model,
                 contents: [{ parts: [textPart, imagePart] }],
-                generationConfig: {
+                config: {
                     responseMimeType: "application/json",
                 }
             })
@@ -2042,19 +2046,25 @@ async function processWithGemini(pageData: PageData) {
 }
 
 async function processWithOpenAI(pageData: PageData) {
+    console.log('🚀 [OpenAI] Starting OpenAI processing...');
+    
     const apiKey = getAPIKey('openai');
-    if (!apiKey) {
-        throw new Error('OpenAI API key not found');
+    if (!apiKey || apiKey.trim() === '') {
+        console.error('❌ [OpenAI] API key not found or empty');
+        throw new Error('OpenAI API key not configured. Please set your API key in the settings.');
     }
+    console.log('✅ [OpenAI] API key found, length:', apiKey.length);
 
-    console.log('Sending request directly to OpenAI API...');
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    console.log('🚀 [OpenAI] Sending request through proxy server...');
+    console.log('🚀 [OpenAI] Proxy URL: http://localhost:3002/api/openai');
+    
+    const response = await fetch('http://localhost:3002/api/openai', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
+            apiKey: apiKey, // UI에서 입력한 API 키 전달
             model: currentSettings.model,
             messages: [
                 {
@@ -2091,19 +2101,26 @@ async function processWithOpenAI(pageData: PageData) {
 
 
 async function processWithUpstage(pageData: PageData) {
+    console.log('🚀 [Upstage] Starting Upstage processing...');
+    
     const apiKey = getAPIKey('upstage');
-    if (!apiKey) {
-        throw new Error('Upstage API key not found');
+    if (!apiKey || apiKey.trim() === '') {
+        console.error('❌ [Upstage] API key not found or empty');
+        throw new Error('Upstage API key not configured. Please set your API key in the settings.');
     }
+    console.log('✅ [Upstage] API key found, length:', apiKey.length);
 
-    console.log('Sending request directly to Upstage API...');
-    const response = await fetch('https://api.upstage.ai/v1/document-ai/document-parse', {
+    console.log('🚀 [Upstage] Sending request through proxy server...');
+    console.log('🚀 [Upstage] Proxy URL: http://localhost:3002/api/upstage');
+    
+    const response = await fetch('http://localhost:3002/api/upstage', {
         method: 'POST',
         headers: {
-            'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+            apiKey: apiKey, // UI에서 입력한 API 키 전달
+            model: currentSettings.model,
             document: `data:${pageData.mimeType};base64,${pageData.data}`,
             ocr: true,
             prompt: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요.\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}"
