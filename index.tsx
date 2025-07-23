@@ -86,6 +86,9 @@ const LOCAL_STORAGE_CONFIG = {
     keyFile: '.encryption_key'
 };
 
+// Use existing APP_CONFIG for consistency
+// GitHub repository configuration is handled by APP_CONFIG
+
 // Pricing information (USD per 1M tokens) - Updated for 2025
 const MODEL_PRICING = {
     // Gemini pricing
@@ -582,6 +585,7 @@ let updateNotification: HTMLDivElement;
 let updateVersionSpan: HTMLSpanElement;
 let updateButton: HTMLButtonElement;
 let dismissUpdateButton: HTMLButtonElement;
+let checkUpdateButton: HTMLButtonElement;
 
 // API Settings Modal elements
 let apiSettingsModal: HTMLDivElement;
@@ -597,24 +601,41 @@ let upstageKeyInput: HTMLInputElement;
 
 // Check if provider is available (proxy server or local endpoint)
 async function isProviderAvailable(provider: string): Promise<boolean> {
-    // For proxy server providers, check if proxy server is running
-    if (['gemini', 'openai', 'upstage'].includes(provider)) {
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 1000);
-            
-            const response = await fetch('http://localhost:3003/health', {
-                method: 'GET',
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            console.log(`Proxy server health response for ${provider}: ${response.status}`);
-            return response.ok;
-        } catch (error) {
-            console.error(`Proxy server health check failed for ${provider}:`, error);
-            return false;
+    // First check if API key is available for all providers except local ones
+    if (['gemini', 'openai', 'upstage', 'claude'].includes(provider)) {
+        const apiKey = getAPIKey(provider);
+        console.log(`[Provider Check] ${provider} API key available:`, !!apiKey);
+        if (!apiKey) return false;
+        
+        // For proxy server providers, check if proxy server is running (optional)
+        if (['gemini', 'openai', 'upstage'].includes(provider)) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1000);
+                
+                const response = await fetch('http://localhost:3002/health', {
+                    method: 'GET',
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                console.log(`[Provider Check] Proxy server health for ${provider}: ${response.status}`);
+                
+                // If proxy server is available, great!
+                if (response.ok) return true;
+                
+                // If proxy server is not available but we have API key, still allow usage
+                console.log(`[Provider Check] Proxy server not available for ${provider}, but API key exists - allowing direct usage`);
+                return true;
+            } catch (error) {
+                console.log(`[Provider Check] Proxy server not available for ${provider}, but API key exists - allowing direct usage`);
+                // Even if proxy server is not available, allow usage if API key exists
+                return true;
+            }
         }
+        
+        // Claude doesn't need proxy server, just API key
+        return true;
     }
     
     // For local models, check if endpoint is accessible
@@ -791,89 +812,6 @@ function compareVersions(version1: string, version2: string): number {
     return 0;
 }
 
-async function checkForUpdates(): Promise<GitHubRelease | null> {
-    if (!APP_CONFIG.checkForUpdates) return null;
-    
-    try {
-        const response = await fetch(`https://api.github.com/repos/${APP_CONFIG.githubRepo}/releases/latest`, {
-            headers: {
-                'Accept': 'application/vnd.github.v3+json',
-                'User-Agent': 'Auto-Scan-App'
-            }
-        });
-        
-        if (!response.ok) {
-            if (response.status === 404) {
-                console.log('No releases found for this repository');
-                return null;
-            }
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const release: GitHubRelease = await response.json();
-        const currentVersion = APP_CONFIG.version;
-        const latestVersion = release.tag_name;
-        
-        if (compareVersions(currentVersion, latestVersion) < 0) {
-            return release;
-        }
-        
-        return null;
-    } catch (error) {
-        console.error('Failed to check for updates:', error);
-        return null;
-    }
-}
-
-function showUpdateNotification(release: GitHubRelease) {
-    if (!updateNotification || !updateVersionSpan) return;
-    
-    updateVersionSpan.textContent = `버전 ${release.tag_name}이 사용 가능합니다.`;
-    updateNotification.classList.remove('hidden');
-    
-    // Store release info for later use
-    updateButton.onclick = () => {
-        window.open(release.html_url, '_blank');
-        hideUpdateNotification();
-    };
-}
-
-function hideUpdateNotification() {
-    if (!updateNotification) return;
-    updateNotification.classList.add('hidden');
-    
-    // Remember that user dismissed this version
-    localStorage.setItem('dismissedUpdate', APP_CONFIG.version);
-}
-
-async function initializeUpdateChecker() {
-    if (!APP_CONFIG.checkForUpdates) return;
-    
-    // Don't check too frequently - limit to once per day
-    const lastCheckTime = localStorage.getItem('lastUpdateCheck');
-    const now = Date.now();
-    const dayInMs = 24 * 60 * 60 * 1000;
-    
-    if (lastCheckTime && (now - parseInt(lastCheckTime)) < dayInMs) {
-        return;
-    }
-    
-    const dismissedVersion = localStorage.getItem('dismissedUpdate');
-    if (dismissedVersion === APP_CONFIG.version) {
-        return;
-    }
-    
-    try {
-        const release = await checkForUpdates();
-        if (release) {
-            // Wait a bit before showing notification
-            setTimeout(() => showUpdateNotification(release), 2000);
-        }
-        localStorage.setItem('lastUpdateCheck', now.toString());
-    } catch (error) {
-        console.error('Update check failed:', error);
-    }
-}
 
 // API Key Security Functions
 function generateKey(): string {
@@ -928,6 +866,166 @@ interface SecureAPIKeys {
 // Cache for decrypted keys to avoid repeated decryption
 let cachedDecryptedKeys: SecureAPIKeys | null = null;
 
+// GitHub Update System
+interface GitHubRelease {
+    tag_name: string;
+    name: string;
+    body: string;
+    html_url: string;
+    published_at: string;
+    assets: Array<{
+        name: string;
+        browser_download_url: string;
+        size: number;
+    }>;
+}
+
+async function checkForUpdates(): Promise<GitHubRelease | null> {
+    try {
+        console.log('Checking for updates from GitHub...');
+        
+        const response = await fetch(`https://api.github.com/repos/${APP_CONFIG.githubRepo}/releases/latest`);
+        
+        if (!response.ok) {
+            console.log('GitHub API request failed:', response.status);
+            return null;
+        }
+        
+        const release: GitHubRelease = await response.json();
+        const latestVersion = release.tag_name.replace(/^v/, ''); // Remove 'v' prefix if present
+        const currentVersion = APP_CONFIG.version;
+        
+        console.log(`Current version: ${currentVersion}, Latest version: ${latestVersion}`);
+        
+        // Simple version comparison (assumes semantic versioning)
+        if (isNewerVersion(latestVersion, currentVersion)) {
+            console.log('New version available:', release.name);
+            return release;
+        }
+        
+        console.log('Already up to date');
+        return null;
+    } catch (error) {
+        console.error('Failed to check for updates:', error);
+        return null;
+    }
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+    const parseVersion = (version: string) => {
+        return version.split('.').map(num => parseInt(num, 10));
+    };
+    
+    const latestParts = parseVersion(latest);
+    const currentParts = parseVersion(current);
+    
+    for (let i = 0; i < Math.max(latestParts.length, currentParts.length); i++) {
+        const latestPart = latestParts[i] || 0;
+        const currentPart = currentParts[i] || 0;
+        
+        if (latestPart > currentPart) return true;
+        if (latestPart < currentPart) return false;
+    }
+    
+    return false;
+}
+
+function showUpdateNotification(release: GitHubRelease) {
+    const notification = document.getElementById('update-notification');
+    const versionSpan = document.getElementById('update-version');
+    const updateButton = document.getElementById('update-button');
+    
+    if (!notification || !versionSpan || !updateButton) return;
+    
+    versionSpan.textContent = `버전 ${release.tag_name}`;
+    updateButton.onclick = () => {
+        window.open(release.html_url, '_blank');
+    };
+    
+    notification.classList.remove('hidden');
+    
+    // Store the last check time
+    localStorage.setItem('last_update_check', Date.now().toString());
+    localStorage.setItem('latest_release_info', JSON.stringify(release));
+}
+
+function hideUpdateNotification() {
+    const notification = document.getElementById('update-notification');
+    if (notification) {
+        notification.classList.add('hidden');
+    }
+}
+
+async function initializeUpdateChecker() {
+    if (!APP_CONFIG.checkForUpdates) return;
+    
+    // Check if we should check for updates
+    const lastCheck = localStorage.getItem('last_update_check');
+    const now = Date.now();
+    
+    if (lastCheck && (now - parseInt(lastCheck)) < (24 * 60 * 60 * 1000)) { // 24시간마다 체크
+        console.log('Update check skipped (too recent)');
+        
+        // Show notification if we have a cached update
+        const cachedRelease = localStorage.getItem('latest_release_info');
+        if (cachedRelease) {
+            try {
+                const release = JSON.parse(cachedRelease);
+                showUpdateNotification(release);
+            } catch (error) {
+                console.error('Failed to parse cached release info:', error);
+            }
+        }
+        return;
+    }
+    
+    // Check for updates
+    const release = await checkForUpdates();
+    if (release) {
+        showUpdateNotification(release);
+    } else {
+        // Clear any cached update notification
+        localStorage.removeItem('latest_release_info');
+        hideUpdateNotification();
+    }
+}
+
+async function manualUpdateCheck() {
+    // Show loading state
+    if (checkUpdateButton) {
+        checkUpdateButton.disabled = true;
+        checkUpdateButton.innerHTML = '<span>확인 중...</span>';
+    }
+    
+    try {
+        console.log('Manual update check initiated');
+        const release = await checkForUpdates();
+        
+        if (release) {
+            showUpdateNotification(release);
+            alert(`새 업데이트가 있습니다! 버전 ${release.tag_name}`);
+        } else {
+            alert('현재 최신 버전을 사용 중입니다.');
+            hideUpdateNotification();
+        }
+        
+        // Update last check time
+        localStorage.setItem('last_update_check', Date.now().toString());
+    } catch (error) {
+        console.error('Manual update check failed:', error);
+        alert('업데이트 확인 중 오류가 발생했습니다.');
+    } finally {
+        // Restore button state
+        if (checkUpdateButton) {
+            checkUpdateButton.disabled = false;
+            checkUpdateButton.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z"/></svg>
+                <span>업데이트 확인</span>
+            `;
+        }
+    }
+}
+
 function saveSecureAPIKeys(keys: SecureAPIKeys) {
     // Use the new async encryption system
     saveAPIKeysToFile(keys).catch(error => {
@@ -947,61 +1045,74 @@ function saveSecureAPIKeys(keys: SecureAPIKeys) {
 }
 
 function loadSecureAPIKeys(): SecureAPIKeys {
-    // First try the new encrypted format
-    const newFormat = localStorage.getItem('encrypted_api_keys');
-    if (newFormat && cachedDecryptedKeys) {
+    // First priority: Use cached decrypted keys if available
+    if (cachedDecryptedKeys) {
+        console.log('Using cached decrypted keys:', Object.keys(cachedDecryptedKeys));
         return cachedDecryptedKeys;
     }
     
-    // Load asynchronously in background
+    // Second priority: Try to load from old format immediately
+    const stored = localStorage.getItem('secureAPIKeys');
+    if (stored) {
+        try {
+            const encryptedKeys = JSON.parse(stored);
+            const encryptionKey = getOrCreateEncryptionKey();
+            const decryptedKeys: SecureAPIKeys = {};
+            
+            Object.entries(encryptedKeys).forEach(([provider, encryptedKey]) => {
+                if (typeof encryptedKey === 'string') {
+                    const decrypted = simpleDecrypt(encryptedKey, encryptionKey);
+                    if (decrypted) {
+                        decryptedKeys[provider as keyof SecureAPIKeys] = decrypted;
+                    }
+                }
+            });
+            
+            // Cache the loaded keys
+            cachedDecryptedKeys = decryptedKeys;
+            console.log('Loaded API keys from old format:', Object.keys(decryptedKeys));
+            return decryptedKeys;
+        } catch (error) {
+            console.error('Failed to load API keys from old format:', error);
+        }
+    }
+    
+    // Third priority: Try new encrypted format (async load in background)
+    const newFormat = localStorage.getItem('encrypted_api_keys');
     if (newFormat) {
+        console.log('Loading from new encrypted format in background...');
         loadAPIKeysFromFile().then(keys => {
             cachedDecryptedKeys = keys;
+            console.log('Background load completed:', Object.keys(keys));
+            // Trigger UI update after background load
+            updateProviderPillsStatus();
         });
     }
     
-    // Fallback to old format for immediate access
-    const stored = localStorage.getItem('secureAPIKeys');
-    if (!stored) return cachedDecryptedKeys || {};
-    
-    try {
-        const encryptedKeys = JSON.parse(stored);
-        const encryptionKey = getOrCreateEncryptionKey();
-        const decryptedKeys: SecureAPIKeys = {};
-        
-        Object.entries(encryptedKeys).forEach(([provider, encryptedKey]) => {
-            if (typeof encryptedKey === 'string') {
-                const decrypted = simpleDecrypt(encryptedKey, encryptionKey);
-                if (decrypted) {
-                    decryptedKeys[provider as keyof SecureAPIKeys] = decrypted;
-                }
-            }
-        });
-        
-        return decryptedKeys;
-    } catch (error) {
-        console.error('Failed to load API keys:', error);
-        return cachedDecryptedKeys || {};
-    }
+    return {};
 }
 
 function getAPIKey(provider: string): string {
+    console.log(`[API Key] Requesting key for ${provider}`);
+    
     // 1순위: UI에서 직접 입력한 API 키 (암호화되어 로컬 파일에 저장)
     const keys = loadSecureAPIKeys();
+    console.log(`[API Key] Available UI keys:`, Object.keys(keys));
+    
     const uiKey = keys[provider as keyof SecureAPIKeys];
     if (uiKey) {
-        console.log(`[API Key] Using encrypted local key for ${provider}`);
+        console.log(`[API Key] ✓ Using encrypted local key for ${provider}`, `(length: ${uiKey.length})`);
         return uiKey;
     }
     
     // 2순위: 환경변수 (.env 파일, 개발용)
     const envKey = (import.meta as any).env?.[`VITE_${provider.toUpperCase()}_API_KEY`];
     if (envKey) {
-        console.log(`[API Key] Using environment key for ${provider}`);
+        console.log(`[API Key] ✓ Using environment key for ${provider}`, `(length: ${envKey.length})`);
         return envKey;
     }
     
-    console.log(`[API Key] No key found for ${provider}`);
+    console.log(`[API Key] ❌ No key found for ${provider}`);
     return '';
 }
 
@@ -1115,11 +1226,25 @@ async function loadAPIKeysFromFile(): Promise<SecureAPIKeys> {
 }
 
 // Modal Management Functions  
-function showAPISettingsModal() {
+async function showAPISettingsModal() {
     if (!apiSettingsModal) return;
     
+    // Show modal first
+    apiSettingsModal.classList.remove('hidden');
+    
     // Load existing keys from UI storage
-    const keys = loadSecureAPIKeys();
+    let keys = loadSecureAPIKeys();
+    
+    // If no cached keys and new format exists, try to load it
+    if (Object.keys(keys).length === 0 && localStorage.getItem('encrypted_api_keys')) {
+        try {
+            console.log('Attempting to load encrypted keys for modal...');
+            keys = await loadAPIKeysFromFile();
+            cachedDecryptedKeys = keys;
+        } catch (error) {
+            console.log('Could not load encrypted keys, using fallback');
+        }
+    }
     
     // Helper function: If no UI key exists, pre-fill with .env values
     const getDisplayKey = (provider: string) => {
@@ -1136,7 +1261,7 @@ function showAPISettingsModal() {
     if (claudeKeyInput) claudeKeyInput.value = getDisplayKey('claude');
     if (upstageKeyInput) upstageKeyInput.value = getDisplayKey('upstage');
     
-    apiSettingsModal.classList.remove('hidden');
+    console.log('Modal populated with keys:', Object.keys(keys));
     document.body.style.overflow = 'hidden';
     
     // Focus first input
@@ -1156,7 +1281,7 @@ function hideAPISettingsModal() {
     if (upstageKeyInput) upstageKeyInput.value = '';
 }
 
-function saveAPIKeysFromModal() {
+async function saveAPIKeysFromModal() {
     const keys: SecureAPIKeys = {};
     
     if (geminiKeyInput?.value.trim()) keys.gemini = geminiKeyInput.value.trim();
@@ -1164,14 +1289,38 @@ function saveAPIKeysFromModal() {
     if (claudeKeyInput?.value.trim()) keys.claude = claudeKeyInput.value.trim();
     if (upstageKeyInput?.value.trim()) keys.upstage = upstageKeyInput.value.trim();
     
-    saveSecureAPIKeys(keys);
-    hideAPISettingsModal();
-    
-    // Refresh provider status
-    updateProviderPillsStatus();
-    
-    // Show success message
-    alert('API 키가 안전하게 저장되었습니다.');
+    try {
+        // Save with new encryption system
+        await saveAPIKeysToFile(keys);
+        
+        // Update cached keys immediately
+        cachedDecryptedKeys = keys;
+        
+        // Also save to old format for immediate access
+        const encryptionKey = getOrCreateEncryptionKey();
+        const encryptedKeys: any = {};
+        
+        Object.entries(keys).forEach(([provider, key]) => {
+            if (key && key.trim()) {
+                encryptedKeys[provider] = simpleEncrypt(key.trim(), encryptionKey);
+            }
+        });
+        
+        localStorage.setItem('secureAPIKeys', JSON.stringify(encryptedKeys));
+        
+        hideAPISettingsModal();
+        
+        // Refresh provider status
+        await updateProviderPillsStatus();
+        
+        // Show success message
+        alert('API 키가 안전하게 저장되었습니다.');
+        
+        console.log('API keys saved and cached successfully:', Object.keys(keys));
+    } catch (error) {
+        console.error('Failed to save API keys:', error);
+        alert('API 키 저장에 실패했습니다. 다시 시도해주세요.');
+    }
 }
 
 // Initialize API keys from .env on first run
@@ -1789,16 +1938,20 @@ async function processWithGemini(pageData: PageData) {
     };
 
     try {
-        console.log('Sending request to Gemini proxy server...');
-        const response = await fetch('http://localhost:3003/api/gemini', {
+        const apiKey = getAPIKey('gemini');
+        if (!apiKey) {
+            throw new Error('Gemini API key not found');
+        }
+
+        console.log('Sending request directly to Gemini API...');
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentSettings.model}:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: currentSettings.model,
-                contents: { parts: [textPart, imagePart] },
-                config: {
+                contents: [{ parts: [textPart, imagePart] }],
+                generationConfig: {
                     responseMimeType: "application/json",
                 }
             })
@@ -1835,31 +1988,37 @@ async function processWithGemini(pageData: PageData) {
 }
 
 async function processWithOpenAI(pageData: PageData) {
-    // Always use proxy server for security
-    const response = await fetch('http://localhost:3003/api/openai', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: currentSettings.model,
-                messages: [
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "text",
-                                text: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항:\n- totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요\n- '총 경비' 항목이 아닌 '입금하신 금액' 또는 '수수료포함금액' 항목을 사용하세요\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}"
-                            },
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${pageData.mimeType};base64,${pageData.data}`
-                                }
+    const apiKey = getAPIKey('openai');
+    if (!apiKey) {
+        throw new Error('OpenAI API key not found');
+    }
+
+    console.log('Sending request directly to OpenAI API...');
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: currentSettings.model,
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항:\n- totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요\n- '총 경비' 항목이 아닌 '입금하신 금액' 또는 '수수료포함금액' 항목을 사용하세요\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}"
+                        },
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: `data:${pageData.mimeType};base64,${pageData.data}`
                             }
-                        ]
-                    }
-                ],
+                        }
+                    ]
+                }
+            ],
                 response_format: { type: "json_object" }
             })
         });
@@ -1878,15 +2037,21 @@ async function processWithOpenAI(pageData: PageData) {
 
 
 async function processWithUpstage(pageData: PageData) {
-    // Use proxy server for security
-    const response = await fetch('http://localhost:3003/api/upstage', {
+    const apiKey = getAPIKey('upstage');
+    if (!apiKey) {
+        throw new Error('Upstage API key not found');
+    }
+
+    console.log('Sending request directly to Upstage API...');
+    const response = await fetch('https://api.upstage.ai/v1/document-ai/document-parse', {
         method: 'POST',
         headers: {
+            'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            model: currentSettings.model,
-            image: `data:${pageData.mimeType};base64,${pageData.data}`,
+            document: `data:${pageData.mimeType};base64,${pageData.data}`,
+            ocr: true,
             prompt: "제공된 수입 정산서 문서에서 정확한 항목별로 데이터를 추출해 주세요:\n\n1. date: 문서의 작성일 (YYYY-MM-DD 형식)\n2. quantity: 수량 (GT 단위)\n3. amountUSD: COMMERCIAL INVOICE CHARGE의 US$ 금액\n4. commissionUSD: COMMISSION의 US$ 금액\n5. totalUSD: '입금하신 금액' 또는 '수수료포함금액'의 US$ 금액 (총 경비가 아님)\n6. totalKRW: '입금하신 금액' 또는 '수수료포함금액'의 원화(₩) 금액 (총 경비가 아님)\n7. balanceKRW: 잔액의 원화(₩) 금액\n\n주의사항: totalUSD와 totalKRW는 반드시 '입금하신 금액' 섹션에서 추출하세요.\n\nJSON 형식으로 반환: {\"date\": \"YYYY-MM-DD\", \"quantity\": 숫자, \"amountUSD\": 숫자, \"commissionUSD\": 숫자, \"totalUSD\": 숫자, \"totalKRW\": 숫자, \"balanceKRW\": 숫자}"
         })
     });
@@ -2115,6 +2280,7 @@ function setupEventListeners() {
     updateVersionSpan = document.getElementById('update-version') as HTMLSpanElement;
     updateButton = document.getElementById('update-button') as HTMLButtonElement;
     dismissUpdateButton = document.getElementById('dismiss-update') as HTMLButtonElement;
+    checkUpdateButton = document.getElementById('check-update-button') as HTMLButtonElement;
     
     // API Settings Modal elements
     apiSettingsModal = document.getElementById('api-settings-modal') as HTMLDivElement;
@@ -2237,6 +2403,7 @@ function setupEventListeners() {
     
     // Update notification handlers
     dismissUpdateButton.addEventListener('click', hideUpdateNotification);
+    checkUpdateButton.addEventListener('click', manualUpdateCheck);
     
     // API Settings Modal handlers
     apiSettingsButton.addEventListener('click', showAPISettingsModal);
