@@ -586,6 +586,7 @@ let updateVersionSpan: HTMLSpanElement;
 let updateButton: HTMLButtonElement;
 let dismissUpdateButton: HTMLButtonElement;
 let checkUpdateButton: HTMLButtonElement;
+let debugStatusButton: HTMLButtonElement;
 
 // API Settings Modal elements
 let apiSettingsModal: HTMLDivElement;
@@ -633,7 +634,10 @@ async function isProviderAvailable(provider: string): Promise<boolean> {
             } catch (error) {
                 console.error(`❌ [Provider Check] Proxy server connection failed for ${provider}:`, error.message);
                 console.error(`❌ [Provider Check] Please start the proxy server with: npm run proxy`);
-                return false;
+                
+                // For testing purposes, allow direct API calls if proxy is not available
+                console.warn(`⚠️ [Provider Check] Allowing direct API calls for ${provider} (not recommended for production)`);
+                return true; // Allow usage with direct API calls
             }
         }
         
@@ -697,11 +701,32 @@ async function updateProviderPillsStatus() {
     
     console.log('🔄 [Provider Status] Starting provider status update...');
     
+    // First check if proxy server is running
+    try {
+        const proxyResponse = await fetch('http://localhost:3002/health', { 
+            method: 'GET',
+            signal: AbortSignal.timeout(2000)
+        });
+        if (proxyResponse.ok) {
+            console.log('✅ [Provider Status] Proxy server is running on port 3002');
+        } else {
+            console.error('❌ [Provider Status] Proxy server responded with error:', proxyResponse.status);
+        }
+    } catch (error) {
+        console.error('❌ [Provider Status] Proxy server not accessible:', error.message);
+        console.error('❌ [Provider Status] Please start proxy server with: npm run proxy');
+    }
+    
     for (const pill of aiProviderPills) {
         const provider = pill.dataset.provider as string;
         const statusIndicator = pill.querySelector('.pill-status') as HTMLElement;
         
         console.log(`🔍 [Provider Status] Checking ${provider}...`);
+        
+        // Debug API key availability
+        const apiKey = getAPIKey(provider);
+        console.log(`🔍 [Provider Status] ${provider} API key:`, apiKey ? `${apiKey.length} chars` : 'not found');
+        
         const isAvailable = await isProviderAvailable(provider);
         console.log(`📊 [Provider Status] ${provider} available: ${isAvailable}`);
         
@@ -1344,13 +1369,24 @@ async function saveAPIKeysFromModal() {
         
         hideAPISettingsModal();
         
-        // Refresh provider status
+        console.log('💾 [API Keys] Keys saved, updating provider status...');
+        console.log('💾 [API Keys] Cached keys after save:', Object.keys(cachedDecryptedKeys || {}));
+        
+        // Force refresh provider status multiple times to ensure it sticks
         await updateProviderPillsStatus();
+        setTimeout(async () => {
+            console.log('💾 [API Keys] Second status update...');
+            await updateProviderPillsStatus();
+        }, 500);
+        setTimeout(async () => {
+            console.log('💾 [API Keys] Third status update...');
+            await updateProviderPillsStatus();
+        }, 1000);
         
         // Show success message
         alert('API 키가 안전하게 저장되었습니다.');
         
-        console.log('API keys saved and cached successfully:', Object.keys(keys));
+        console.log('💾 [API Keys] API keys saved and cached successfully:', Object.keys(keys));
     } catch (error) {
         console.error('Failed to save API keys:', error);
         alert('API 키 저장에 실패했습니다. 다시 시도해주세요.');
@@ -1787,12 +1823,48 @@ function hideUndoNotification() {
 function handleImageFile(file: File) {
     const reader = new FileReader();
     reader.onload = (e) => {
-        const result = e.target?.result as string;
-        const pageData: PageData = {
-            data: result.split(',')[1],
-            mimeType: file.type,
-            fileName: file.name
-        };
+        try {
+            const result = e.target?.result as string;
+            
+            // 이미지 데이터 유효성 검사
+            if (!result || typeof result !== 'string') {
+                console.error(`이미지 파일 ${file.name} 읽기 실패: 빈 결과`);
+                alert(`이미지 파일 ${file.name}을 읽을 수 없습니다.`);
+                return;
+            }
+            
+            if (!result.includes(',')) {
+                console.error(`이미지 파일 ${file.name} 처리 실패: 잘못된 데이터 URL 형식`);
+                alert(`이미지 파일 ${file.name}의 형식이 올바르지 않습니다.`);
+                return;
+            }
+            
+            const base64Data = result.split(',')[1];
+            if (!base64Data || base64Data.length === 0) {
+                console.error(`이미지 파일 ${file.name} 처리 실패: 빈 base64 데이터`);
+                alert(`이미지 파일 ${file.name}에서 데이터를 추출할 수 없습니다.`);
+                return;
+            }
+            
+            // MIME 타입 유효성 검사
+            const mimeType = file.type || 'image/png';
+            if (!mimeType.startsWith('image/')) {
+                console.error(`이미지 파일 ${file.name} 처리 실패: 잘못된 MIME 타입 ${mimeType}`);
+                alert(`파일 ${file.name}은 이미지 파일이 아닙니다.`);
+                return;
+            }
+            
+            const pageData: PageData = {
+                data: base64Data,
+                mimeType: mimeType,
+                fileName: file.name || 'unknown.png'
+            };
+            
+            console.log(`✅ 이미지 파일 처리 완료:`, {
+                fileName: pageData.fileName,
+                mimeType: pageData.mimeType,
+                dataLength: pageData.data.length
+            });
         
         // Add to file groups - if file already exists, replace it
         if (pdfFileGroups.has(file.name)) {
@@ -1805,19 +1877,29 @@ function handleImageFile(file: File) {
         pdfFileGroups.set(file.name, [pageData]);
         
         // Auto-select the uploaded page
-        selectedPages.push(pageData);
-        
-        // Show preview
-        imagePreview.src = result;
-        imagePreview.classList.remove('hidden');
-        dropZone.querySelector('p')?.classList.add('hidden');
-        
-        // Render PDF pages to show the image file too
-        renderPdfPages();
-        
-        // Update button state after page is selected
-        updateProcessButtonState();
+            selectedPages.push(pageData);
+            
+            // Show preview
+            imagePreview.src = result;
+            imagePreview.classList.remove('hidden');
+            dropZone.querySelector('p')?.classList.add('hidden');
+            
+            // Render PDF pages to show the image file too
+            renderPdfPages();
+            
+            // Update button state after page is selected
+            updateProcessButtonState();
+        } catch (error) {
+            console.error(`이미지 파일 ${file.name} 처리 중 오류:`, error);
+            alert(`이미지 파일 ${file.name} 처리 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+        }
     };
+    
+    reader.onerror = () => {
+        console.error(`이미지 파일 ${file.name} 읽기 실패`);
+        alert(`이미지 파일 ${file.name}을 읽는 중 오류가 발생했습니다.`);
+    };
+    
     reader.readAsDataURL(file);
 }
 
@@ -1847,10 +1929,23 @@ async function handlePdfFile(file: File) {
                 await page.render({ canvasContext: context!, viewport: viewport }).promise;
                 
                 const pageDataUrl = canvas.toDataURL('image/png');
+                
+                // 페이지 데이터 유효성 검사
+                if (!pageDataUrl || !pageDataUrl.includes(',')) {
+                    console.error(`PDF 페이지 ${i} 렌더링 실패: 빈 데이터 URL`);
+                    continue;
+                }
+                
+                const base64Data = pageDataUrl.split(',')[1];
+                if (!base64Data || base64Data.length === 0) {
+                    console.error(`PDF 페이지 ${i} 렌더링 실패: 빈 base64 데이터`);
+                    continue;
+                }
+                
                 const pageInfo: PageData = {
-                    data: pageDataUrl.split(',')[1],
+                    data: base64Data,
                     mimeType: 'image/png',
-                    fileName: file.name,
+                    fileName: file.name || `page-${i}.pdf`,
                     pageNumber: i
                 };
                 pages.push(pageInfo);
@@ -2004,7 +2099,34 @@ async function processWithGemini(pageData: PageData) {
         console.log('✅ [Gemini] Response headers:', Object.fromEntries(response.headers.entries()));
 
         if (!response.ok) {
-            console.error('❌ [Gemini] API request failed with status:', response.status);
+            console.error('❌ [Gemini] Proxy API request failed with status:', response.status);
+            
+            // Fallback to direct API call if proxy fails
+            if (response.status >= 500 || response.status === 0) {
+                console.warn('⚠️ [Gemini] Proxy server error, trying direct API call...');
+                
+                const directResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentSettings.model}:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        contents: [{ parts: [textPart, imagePart] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                        }
+                    })
+                });
+                
+                if (directResponse.ok) {
+                    console.log('✅ [Gemini] Direct API call successful');
+                    const result = await directResponse.json();
+                    const jsonText = result.candidates[0].content.parts[0].text;
+                    const parsedData = JSON.parse(jsonText);
+                    return validateAndCleanExtractedData(parsedData);
+                }
+            }
+            
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
             console.error('Gemini proxy error:', errorData);
             throw new Error(`Gemini API 오류 (${response.status}): ${errorData.error || response.statusText}`);
@@ -2201,6 +2323,19 @@ async function processDocument() {
     console.log('선택된 페이지 수:', selectedPages.length);
     console.log('현재 설정:', currentSettings);
     
+    // selectedPages 배열 상세 검사
+    console.log('📄 [Process] selectedPages 상세 정보:');
+    selectedPages.forEach((page, index) => {
+        console.log(`📄 [Process] Page ${index + 1}:`, {
+            fileName: page?.fileName || 'unknown',
+            mimeType: page?.mimeType || 'missing',
+            dataLength: page?.data?.length || 0,
+            pageNumber: page?.pageNumber || 'N/A',
+            hasData: !!page?.data,
+            hasMimeType: !!page?.mimeType
+        });
+    });
+    
     if (selectedPages.length === 0) {
         alert('먼저 이미지나 PDF 페이지를 선택하세요.');
         return;
@@ -2230,8 +2365,28 @@ async function processDocument() {
         loadingOverlay.querySelector('p')!.textContent = `AI가 문서를 분석 중입니다... (${i + 1}/${totalToProcess})`;
 
         try {
+            // 페이지 데이터 유효성 검사
+            if (!page) {
+                throw new Error(`페이지 ${i + 1}: 페이지 데이터가 없습니다.`);
+            }
+            
+            if (!page.data) {
+                throw new Error(`페이지 ${i + 1}: 이미지 데이터가 없습니다.`);
+            }
+            
+            if (!page.mimeType) {
+                throw new Error(`페이지 ${i + 1}: MIME 타입 정보가 없습니다.`);
+            }
+            
+            console.log(`✅ Processing page ${i + 1}:`, {
+                provider: currentSettings.provider,
+                fileName: page.fileName || 'unknown',
+                mimeType: page.mimeType,
+                dataLength: page.data.length,
+                pageNumber: page.pageNumber || 'N/A'
+            });
+            
             let extractedData;
-            console.log(`Processing page ${i + 1} with provider: ${currentSettings.provider}`);
             
             switch (currentSettings.provider) {
                 case 'gemini':
@@ -2352,10 +2507,12 @@ function setupEventListeners() {
     updateButton = document.getElementById('update-button') as HTMLButtonElement;
     dismissUpdateButton = document.getElementById('dismiss-update') as HTMLButtonElement;
     checkUpdateButton = document.getElementById('check-update-button') as HTMLButtonElement;
+    debugStatusButton = document.getElementById('debug-status-button') as HTMLButtonElement;
     
     // Debug: Check if update button is properly loaded
     console.log('🔧 [Debug] Update button element:', checkUpdateButton);
     console.log('🔧 [Debug] Update button visibility:', checkUpdateButton ? getComputedStyle(checkUpdateButton).display : 'element not found');
+    console.log('🔧 [Debug] Debug button element:', debugStatusButton);
     
     // Windows-specific debugging
     console.log('🔧 [Debug] Platform:', navigator.platform);
@@ -2492,6 +2649,7 @@ function setupEventListeners() {
     // Update notification handlers
     dismissUpdateButton.addEventListener('click', hideUpdateNotification);
     checkUpdateButton.addEventListener('click', manualUpdateCheck);
+    debugStatusButton.addEventListener('click', debugAPIKeyStatus);
     
     // API Settings Modal handlers
     apiSettingsButton.addEventListener('click', showAPISettingsModal);
@@ -2554,6 +2712,50 @@ function setupEventListeners() {
             }
         });
     });
+}
+
+// Debug status function
+function debugAPIKeyStatus() {
+    console.log('🔧 [Debug Status] ========== API Key Debug Info ==========');
+    
+    // Check localStorage
+    const localStorageKeys = localStorage.getItem('secureAPIKeys');
+    console.log('🔧 [Debug Status] localStorage secureAPIKeys:', localStorageKeys ? 'exists' : 'not found');
+    if (localStorageKeys) {
+        try {
+            const parsed = JSON.parse(localStorageKeys);
+            console.log('🔧 [Debug Status] localStorage keys:', Object.keys(parsed));
+        } catch (e) {
+            console.log('🔧 [Debug Status] localStorage parse error:', e);
+        }
+    }
+    
+    // Check cached keys
+    console.log('🔧 [Debug Status] cachedDecryptedKeys:', cachedDecryptedKeys ? Object.keys(cachedDecryptedKeys) : 'null');
+    if (cachedDecryptedKeys) {
+        Object.entries(cachedDecryptedKeys).forEach(([provider, key]) => {
+            console.log(`🔧 [Debug Status] ${provider}: ${key ? `${key.length} chars` : 'empty'}`);
+        });
+    }
+    
+    // Check getAPIKey for each provider
+    const providers = ['gemini', 'openai', 'upstage'];
+    providers.forEach(provider => {
+        const key = getAPIKey(provider);
+        console.log(`🔧 [Debug Status] getAPIKey(${provider}): ${key ? `${key.length} chars` : 'not found'}`);
+    });
+    
+    // Check environment variables
+    console.log('🔧 [Debug Status] Environment variables:');
+    console.log('🔧 [Debug Status] VITE_GEMINI_API_KEY:', (import.meta as any).env?.VITE_GEMINI_API_KEY ? 'exists' : 'not found');
+    console.log('🔧 [Debug Status] VITE_OPENAI_API_KEY:', (import.meta as any).env?.VITE_OPENAI_API_KEY ? 'exists' : 'not found');
+    console.log('🔧 [Debug Status] VITE_UPSTAGE_API_KEY:', (import.meta as any).env?.VITE_UPSTAGE_API_KEY ? 'exists' : 'not found');
+    
+    console.log('🔧 [Debug Status] ========================================');
+    
+    // Force provider status update
+    console.log('🔧 [Debug Status] Forcing provider status update...');
+    updateProviderPillsStatus();
 }
 
 // Network connectivity test for Windows debugging

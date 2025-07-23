@@ -177,6 +177,21 @@ header p {
     box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
 }
 
+.debug-btn {
+    padding: 0.5rem 1rem;
+    background-color: #28a745;
+    color: white;
+    border: 1px solid #28a745;
+    font-size: 0.875rem;
+    margin-left: 0.5rem;
+}
+
+.debug-btn:hover {
+    background-color: #218838;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
 
 /* Modal Styles */
 .modal {
